@@ -15,6 +15,7 @@ from rich.prompt import IntPrompt
 from rich.table import Table
 
 from . import __version__
+from .blend import blend_capability, create_blend_asset
 from .config import cache_dir, load_config, save_project_config, save_user_config, user_config_path
 from .discovery import (
     check_write_access,
@@ -28,16 +29,21 @@ from .errors import CS2AssetError
 from .installer import Installer
 from .pipeline import ImportOptions, import_asset, rebuild_asset
 from .provider import PolyHavenProvider
+from .sources import SourceRegistry
 
 app = typer.Typer(
     no_args_is_help=True,
     invoke_without_command=True,
-    help="Import Poly Haven assets into CS2 Hammer addons.",
+    help="Convert local and provider assets into CS2 Hammer resources.",
 )
 projects_app = typer.Typer(no_args_is_help=True, help="Select a Hammer addon.")
 config_app = typer.Typer(no_args_is_help=True, help="Inspect and set import defaults.")
+blend_app = typer.Typer(
+    no_args_is_help=True, help="Create experimental paintable environment blends."
+)
 app.add_typer(projects_app, name="projects")
 app.add_typer(config_app, name="config")
+app.add_typer(blend_app, name="blend")
 console = Console(highlight=False)
 errors = Console(stderr=True, highlight=False)
 
@@ -137,7 +143,7 @@ def emit(ctx, data, *, json=False):
         return
     if "resources" in data:
         console.print(
-            f"Installed Poly Haven: {data['name']} ({data['resolution']})",
+            f"Installed {data.get('provider', 'asset')}: {data['name']} ({data['resolution']})",
             style="green",
             markup=False,
         )
@@ -148,11 +154,18 @@ def emit(ctx, data, *, json=False):
             console.print(f"• {note}", style="yellow", markup=False)
     elif data.get("dry_run"):
         console.print(
-            f"Poly Haven: {data['name']} → {data['project']} ({data['resolution']})", markup=False
+            f"{data.get('provider', 'asset')}: {data['name']} → {data['project']} ({data['resolution']})",
+            markup=False,
         )
-        console.print(f"Selected downloads: {data['download_bytes'] / 1048576:.1f} MiB")
-        for item in data["files"]:
+        console.print(f"Selected downloads: {data.get('download_bytes', 0) / 1048576:.1f} MiB")
+        for item in data.get("files", []):
             console.print(f"{item['key']}: {item['relative_path']}", markup=False)
+        for index, layer in enumerate(data.get("layers", []), 1):
+            console.print(f"Layer {index}: {layer['source']['uri']}", markup=False)
+        for resource in data.get("planned_resources", []):
+            console.print(resource, markup=False)
+        for note in data.get("warnings", []):
+            console.print(f"• {note}", style="yellow", markup=False)
     else:
         console.print_json(data=data)
 
@@ -225,6 +238,8 @@ def doctor(ctx: typer.Context, project: str | None = None, json: bool = False):
         "project": selected.as_dict() if selected else None,
         "write_access": check_write_access(selected) if selected else None,
         "capabilities": {"textures": True, "hdris": True, "models": blender is not None},
+        "sources": {"local": True, "polyhaven": True},
+        "blend_support": blend_capability(installed),
         "project_count": len(discover_projects(installed)),
     }
     if not report["compiler_help"].startswith("Usage: resourcecompiler"):
@@ -242,8 +257,13 @@ def search(
     refresh: bool = False,
     json: bool = False,
     offline: bool = False,
+    provider_name: Annotated[str, typer.Option("--provider")] = "polyhaven",
 ):
     """Search Poly Haven assets by words and asset type."""
+    if provider_name != "polyhaven":
+        raise CS2AssetError(
+            f"Provider {provider_name!r} does not support search. Use --provider polyhaven."
+        )
     with PolyHavenProvider(cache_dir(), offline=offline) as provider:
         assets = provider.search(query, type, limit=limit, refresh=refresh)
         if json or ctx.obj["json"]:
@@ -268,12 +288,15 @@ def info(
     refresh: bool = False,
     json: bool = False,
     offline: bool = False,
+    asset_type: Annotated[str | None, typer.Option("--type")] = None,
 ):
-    """Show Poly Haven metadata and files selected for an import."""
+    """Inspect a local or provider asset and the selected source files."""
     from .pipeline import plan_import
 
-    with PolyHavenProvider(cache_dir(), offline=offline) as provider:
-        resolved = provider.resolve_files(asset, resolution, refresh=refresh)
+    with SourceRegistry(cache_dir(), offline=offline) as registry:
+        resolved = registry.provider_for(asset).resolve(
+            asset, resolution, refresh=refresh, asset_type=asset_type
+        )
         emit(
             ctx,
             {
@@ -284,8 +307,8 @@ def info(
         )
 
 
-def _perform(ctx, project, json, offline, operation):
-    installed, selected = select_project(ctx, project)
+def _perform(ctx, project, json, offline, operation, *, prompt=True):
+    installed, selected = select_project(ctx, project, prompt=prompt)
     merged = settings(ctx, selected)
     quiet = json or ctx.obj["json"]
     tasks = {}
@@ -309,7 +332,7 @@ def _perform(ctx, project, json, offline, operation):
                 tasks[key] = progress.add_task(key, total=total)
             progress.update(tasks[key], completed=done, total=total)
 
-    with PolyHavenProvider(cache_dir(), offline=offline) as provider, progress:
+    with SourceRegistry(cache_dir(), offline=offline, progress=downloaded) as provider, progress:
         return operation(
             installed,
             selected,
@@ -342,8 +365,11 @@ def import_command(
     force: bool = False,
     json: bool = False,
     offline: bool = False,
+    asset_type: Annotated[
+        str | None, typer.Option("--type", help="Require material, model, or sky.")
+    ] = None,
 ):
-    """Download, convert, compile, and install a Poly Haven asset into Hammer."""
+    """Resolve, convert, compile, and install a local or provider asset into Hammer."""
     explicit = {
         "resolution": resolution,
         "scale": scale,
@@ -380,11 +406,59 @@ def import_command(
             phase=phase,
             download_progress=downloaded,
             compiler_progress=compiler,
+            asset_type=asset_type,
         )
 
     # Select/project writes are suppressed on noninteractive dry runs unless project exists.
-    result = _perform(ctx, project, json, offline, operation)
+    result = _perform(ctx, project, json, offline, operation, prompt=not dry_run)
     emit(ctx, result, json=json)
+
+
+@blend_app.command("create")
+@guarded
+def blend_create(
+    ctx: typer.Context,
+    a: str,
+    b: str,
+    name: Annotated[str, typer.Option(help="Name for the two-layer material.")],
+    project: str | None = None,
+    resolution: str | None = None,
+    normal_format: str | None = None,
+    surface: str | None = None,
+    dry_run: bool = False,
+    refresh: bool = False,
+    overwrite: bool = False,
+    force: bool = False,
+    offline: bool = False,
+    json: bool = False,
+):
+    """Compile a two-layer blend; interactive Hammer painting remains unverified."""
+
+    def operation(installed, selected, provider, merged, phase, downloaded, compiler):
+        options = ImportOptions(
+            resolution=resolution if resolution is not None else merged.get("resolution"),
+            normal_format=normal_format or merged.get("normal_format"),
+            surface=surface or merged.get("surface", "default"),
+        )
+        return create_blend_asset(
+            installed,
+            selected,
+            provider,
+            cache_dir(),
+            a,
+            b,
+            name,
+            options,
+            dry_run=dry_run,
+            refresh=refresh,
+            overwrite=overwrite,
+            force=force,
+            phase=phase,
+            download_progress=downloaded,
+            compiler_progress=compiler,
+        )
+
+    emit(ctx, _perform(ctx, project, json, offline, operation, prompt=not dry_run), json=json)
 
 
 @app.command("list")
@@ -396,7 +470,7 @@ def list_imports(ctx: typer.Context, project: str | None = None, json: bool = Fa
     if json or ctx.obj["json"]:
         emit(ctx, records, json=True)
         return
-    table = Table(title=f"Imported Poly Haven assets: {selected.name}")
+    table = Table(title=f"Imported assets: {selected.name}")
     for column in ("Asset", "Type", "Variant", "Resource"):
         table.add_column(column)
     for record in records:
@@ -418,8 +492,9 @@ def rebuild(
     force: bool = False,
     offline: bool = False,
     json: bool = False,
+    cached_inputs: bool = False,
 ):
-    """Rebuild installed variants using their recorded options and cached inputs."""
+    """Rebuild saved variants; --cached-inputs uses verified local snapshots."""
 
     def operation(installed, selected, provider, merged, phase, downloaded, compiler):
         return rebuild_asset(
@@ -436,6 +511,7 @@ def rebuild(
             phase=phase,
             download_progress=downloaded,
             compiler_progress=compiler,
+            cached_inputs=cached_inputs,
         )
 
     emit(ctx, _perform(ctx, project, json, offline, operation), json=json)

@@ -62,6 +62,26 @@ def write_image(path: Path, pixels: np.ndarray, *, hdr: bool = False) -> Path:
     return path
 
 
+def resize_image(source: Path, target: Path, limit: int) -> Path:
+    """Cap resolution without upscaling or losing floating-point HDR radiance."""
+    pixels = read_image(source)
+    height, width, channels = pixels.shape
+    if max(width, height) <= limit:
+        return source
+    ratio = limit / max(width, height)
+    new_width, new_height = max(1, round(width * ratio)), max(1, round(height * ratio))
+    if width == 2 * height:
+        new_height = max(1, min(new_height, limit // 2))
+        new_width = 2 * new_height
+    roi = oiio.ROI(0, new_width, 0, new_height, 0, 1, 0, channels)
+    resized = oiio.ImageBufAlgo.resize(oiio.ImageBuf(pixels), roi=roi)
+    if resized.has_error:
+        raise CS2AssetError(f"Cannot resize {source}: {resized.geterror()}")
+    return write_image(
+        target, resized.get_pixels(oiio.FLOAT), hdr=source.suffix.lower() in {".hdr", ".exr"}
+    )
+
+
 def linear_to_srgb(pixels: np.ndarray) -> np.ndarray:
     return np.where(
         pixels <= 0.0031308, pixels * 12.92, 1.055 * np.maximum(pixels, 0) ** (1 / 2.4) - 0.055

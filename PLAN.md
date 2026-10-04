@@ -1,5 +1,9 @@
 # cs2asset implementation plan
 
+The current refactor plan is [Source-independent imports and Hammer blend materials](docs/refactor-plan.md).
+The original implementation plan below is retained as historical context; implementation
+and validation status is documented in README.md and docs/validation.md.
+
 Build a Windows-first Python CLI that imports Poly Haven textures, static models, and HDRIs into a selected CS2 Hammer addon. One command should download the required files, convert them, generate Source 2 source assets, invoke Valve's compiler, and install the complete result into the project. Use uv for packaging and execution, and Rich for terminal output.
 
 This document is a plan, not an implemented or validated importer. Research and local discovery were performed on 2026-10-04.

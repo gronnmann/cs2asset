@@ -10,11 +10,12 @@ import re
 from pathlib import Path
 from uuid import uuid4
 
+from cs2asset.blend import create_blend_asset
 from cs2asset.compiler import run_process
 from cs2asset.config import cache_dir
 from cs2asset.discovery import Project, discover_cs2
-from cs2asset.pipeline import ImportOptions, import_asset
-from cs2asset.provider import PolyHavenProvider
+from cs2asset.pipeline import ImportOptions, import_asset, rebuild_asset
+from cs2asset.sources import SourceRegistry
 
 
 def validation_map(installation, project, records, logs):
@@ -80,8 +81,10 @@ def validation_map(installation, project, records, logs):
         progress=lambda line: print(line, flush=True),
     )
     package = project.game_dir / "maps/cs2asset_validation.vpk"
-    if not package.is_file() or package.stat().st_size == 0 or not re.search(
-        r"OK:\s*\d+ compiled,\s*0 failed", output
+    if (
+        not package.is_file()
+        or package.stat().st_size == 0
+        or not re.search(r"OK:\s*\d+ compiled,\s*0 failed", output)
     ):
         raise RuntimeError(f"Map build did not produce a validated package; see {logs}")
     return {
@@ -99,7 +102,22 @@ def main():
         "--map", action="store_true", help="Compile a disposable Valve template map"
     )
     parser.add_argument("--resolution", default="1k")
+    parser.add_argument(
+        "--asset",
+        action="append",
+        default=[],
+        help="Local or provider input; repeat for several imports",
+    )
+    parser.add_argument(
+        "--blend", nargs=2, metavar=("A", "B"), help="Import a blend from two material sources"
+    )
+    parser.add_argument("--blend-name", default="validation_blend")
+    parser.add_argument(
+        "--rebuild", action="store_true", help="Also rebuild each installed import by its ID"
+    )
     args = parser.parse_args()
+    if args.map and (args.asset or args.blend):
+        parser.error("--map uses the default Poly Haven validation set; omit --asset/--blend")
     installation = discover_cs2()
     project = Project(
         "cs2asset_validation",
@@ -109,8 +127,11 @@ def main():
     project.content_dir.mkdir(parents=True, exist_ok=True)
     project.game_dir.mkdir(parents=True, exist_ok=True)
     records = {}
-    with PolyHavenProvider(cache_dir(), offline=args.offline) as provider:
-        for asset in ("concrete_floor_01", "sunset_jhbcentral", "dirty_football"):
+    inputs = args.asset or (
+        [] if args.blend else ["concrete_floor_01", "sunset_jhbcentral", "dirty_football"]
+    )
+    with SourceRegistry(cache_dir(), offline=args.offline) as provider:
+        for asset in inputs:
             records[asset] = import_asset(
                 installation,
                 project,
@@ -120,6 +141,22 @@ def main():
                 ImportOptions(resolution=args.resolution),
                 phase=print,
             )
+        if args.blend:
+            records[f"blend:{args.blend_name}"] = create_blend_asset(
+                installation,
+                project,
+                provider,
+                cache_dir(),
+                *args.blend,
+                args.blend_name,
+                ImportOptions(resolution=args.resolution),
+                phase=print,
+            )
+        if args.rebuild:
+            for key, record in list(records.items()):
+                records[key] = rebuild_asset(
+                    installation, project, provider, cache_dir(), record["id"], phase=print
+                )[0]
     summary = {"project": project.as_dict(), "imports": records}
     logs = Path(".validation") / "end-to-end"
     logs.mkdir(parents=True, exist_ok=True)

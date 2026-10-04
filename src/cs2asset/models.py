@@ -14,7 +14,7 @@ MODELDOC_HEADER = (
     "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} "
     "format:modeldoc36:version{972dada4-b828-45a4-bb93-7795cf0585da} -->"
 )
-MODEL_CONVERTER_VERSION = 1
+MODEL_CONVERTER_VERSION = 2
 
 
 @dataclass
@@ -45,6 +45,7 @@ def export_model(
     *,
     scale: float = 1.0,
     timeout: float = 600,
+    dependency_remap: dict[str, str] | None = None,
 ) -> ModelExport:
     """Evaluate static geometry, export inch-sized Z-up FBX, and inspect materials.
 
@@ -71,6 +72,7 @@ def export_model(
                 "output_dir": str(output_dir.resolve()),
                 "result": str(result.resolve()),
                 "scale": scale,
+                "dependency_remap": dependency_remap or {},
             }
         ),
         encoding="utf-8",

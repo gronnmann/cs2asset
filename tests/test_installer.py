@@ -52,6 +52,26 @@ def test_repeated_import_reuses_unchanged_outputs(setup, monkeypatch):
     install(setup)
 
 
+def test_blend_identity_collision_rejects_reordered_sources(setup):
+    installer, source, compiled = setup
+    sources = [
+        {"provider": "local", "uri": "C:/Assets/ground"},
+        {"provider": "polyhaven", "uri": "polyhaven:rock"},
+    ]
+    record = installer.install(
+        "blend:same", {REL: source}, {REL + "_c": compiled}, {"sources": sources}
+    )
+    with pytest.raises(CS2AssetError, match="Import identity collision"):
+        installer.install(
+            "blend:same",
+            {REL: source},
+            {REL + "_c": compiled},
+            {"sources": list(reversed(sources))},
+            overwrite=True,
+        )
+    assert installer.imports() == {"blend:same": record}
+
+
 def test_unowned_file_is_never_overwritten_even_with_flag(setup):
     installer, source, _ = setup
     target = installer.project.content_dir / REL

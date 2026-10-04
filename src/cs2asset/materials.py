@@ -22,23 +22,21 @@ def write_vmat(destination: Path, fields: dict) -> Path:
     return destination
 
 
-def create_material(
-    content: Path,
-    resource_dir: str,
-    maps: dict[str, Path],
-    *,
-    normal_format: str = "gl",
-    constants: dict | None = None,
-    surface: str = "default",
-    tiling: float = 1.0,
-) -> tuple[Path, list[str]]:
-    """Write material.vmat and normalized maps under a relative addon directory."""
-    if not math.isfinite(tiling) or tiling <= 0:
-        raise CS2AssetError("Material tiling must be a finite positive number")
+MATERIAL_PARAMETERS = {
+    "base_color": "TextureColor",
+    "normal": "TextureNormal",
+    "roughness": "TextureRoughness",
+    "metalness": "TextureMetalness",
+    "ao": "TextureAmbientOcclusion",
+    "opacity": "TextureTranslucency",
+}
+
+
+def prepare_material_maps(destination, maps, *, normal_format="gl", constants=None):
+    """The shared image/constant normalization used by ordinary and blend materials."""
     constants = constants or {}
-    destination = content / resource_dir
     destination.mkdir(parents=True, exist_ok=True)
-    warnings = []
+    warnings, prepared = [], {}
     defaults = {
         "base_color": constants.get("base_color", [0.5, 0.5, 0.5]),
         "normal": [0.5, 0.5, 1.0],
@@ -46,22 +44,6 @@ def create_material(
         "metalness": [constants.get("metalness", 0.0)],
         "ao": [1.0],
     }
-    parameters = {
-        "base_color": "TextureColor",
-        "normal": "TextureNormal",
-        "roughness": "TextureRoughness",
-        "metalness": "TextureMetalness",
-        "ao": "TextureAmbientOcclusion",
-        "opacity": "TextureTranslucency",
-    }
-    fields = {
-        "shader": "csgo_complex.vfx",
-        "F_SPECULAR": 1,
-        "F_METALNESS_TEXTURE": 1,
-        "PhysicsSurfaceProperties": surface,
-        "g_vTexCoordScale": f"[{tiling} {tiling}]",
-    }
-    # Use separate opacity, as specified by Valve's own import_settings.txt.
     maps = dict(maps)
     if "opacity" not in maps and "base_color" in maps:
         color = read_image(maps["base_color"])
@@ -71,7 +53,7 @@ def create_material(
         maps["opacity"] = write_image(
             destination / "source_alpha.png", np.full((4, 4, 1), constants["opacity"])
         )
-    for role, parameter in parameters.items():
+    for role in MATERIAL_PARAMETERS:
         target = destination / f"{role}.png"
         if role in maps:
             normalize_map(maps[role], target, role, normal_format=normal_format)
@@ -83,13 +65,47 @@ def create_material(
             warnings.append(f"{role}: using constant {values.tolist()}")
         else:
             continue
-        fields[parameter] = f"{resource_dir}/{role}.png"
-    if "opacity" in maps:
+        prepared[role] = target
+    return prepared, warnings
+
+
+def create_material(
+    content: Path,
+    resource_dir: str,
+    maps: dict[str, Path],
+    *,
+    normal_format: str = "gl",
+    constants: dict | None = None,
+    surface: str = "default",
+    tiling: float = 1.0,
+) -> tuple[Path, list[str]]:
+    """Write material.vmat and normalized maps using the validated CS2 complex contract."""
+    if not math.isfinite(tiling) or tiling <= 0:
+        raise CS2AssetError("Material tiling must be a finite positive number")
+    destination = content / resource_dir
+    prepared, warnings = prepare_material_maps(
+        destination,
+        maps,
+        normal_format=normal_format,
+        constants=constants,
+    )
+    fields = {
+        "shader": "csgo_complex.vfx",
+        "F_SPECULAR": 1,
+        "F_METALNESS_TEXTURE": 1,
+        "PhysicsSurfaceProperties": surface,
+        "g_vTexCoordScale": f"[{tiling} {tiling}]",
+        **{
+            MATERIAL_PARAMETERS[role]: path.relative_to(content).as_posix()
+            for role, path in prepared.items()
+        },
+    }
+    if "opacity" in prepared:
         fields["F_ALPHA_TEST"] = 1
         fields["g_flAlphaTestReference"] = 0.5
         warnings.append("Opacity uses alpha testing (cutout), not blended transparency")
     if "height" in maps:
-        warnings.append("Height map is retained in the download cache; displacement is not enabled")
+        warnings.append("Height map is retained in the input cache; displacement is not enabled")
     return write_vmat(destination / "material.vmat", fields), warnings
 
 

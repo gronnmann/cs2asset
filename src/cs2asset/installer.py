@@ -72,6 +72,26 @@ def _hash_or_none(path: Path) -> str | None:
     return file_hash(path)
 
 
+def _source_identity(record: dict) -> tuple | None:
+    """Protect stable import IDs without requiring provenance in legacy records."""
+    sources = record.get("sources")
+    if sources is None:
+        source = record.get("source")
+        if source is None:
+            return None
+        sources = [source]
+    if not isinstance(sources, list) or not sources:
+        raise CS2AssetError("Invalid source provenance in import record")
+    identity = []
+    for source in sources:
+        if not isinstance(source, dict) or not all(
+            isinstance(source.get(key), str) and source[key] for key in ("provider", "uri")
+        ):
+            raise CS2AssetError("Invalid source provenance in import record")
+        identity.append((source["provider"], os.path.normcase(source["uri"])))
+    return tuple(identity)
+
+
 def _copy_atomic(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
@@ -207,6 +227,17 @@ class Installer:
             self._recover_locked()
             old_manifest = self._manifest()
             records = old_manifest["imports"]
+            proposed_source = _source_identity(metadata)
+            previous_source = _source_identity(records.get(import_id, {}))
+            if (
+                previous_source is not None
+                and proposed_source is not None
+                and previous_source != proposed_source
+            ):
+                raise CS2AssetError(
+                    f"Import identity collision: {import_id} already belongs to different sources. "
+                    "Use a distinct source location or recipe name."
+                )
             owners: dict[tuple[str, str], list[tuple[str, dict]]] = {}
             for identifier, record in records.items():
                 for output in record.get("outputs", []):

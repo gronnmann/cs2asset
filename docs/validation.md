@@ -19,8 +19,8 @@ All three were rebuilt offline from verified downloads. Subsequent unchanged
 imports reuse converted sources and receive Valve's explicit skipped/dependency
 summary. Structured `list`, `doctor`, dry-run, search, and configuration commands
 were exercised. Routine API tests use committed fixtures rather than live servers.
-The final opt-in regression run passed **201 tests**, including real Blender and
-Valve checks. Ruff, wheel/source-distribution builds, and `uvx --from .` passed.
+The original Poly Haven regression run passed **201 tests**, including real Blender
+and Valve checks. The generic importer validation below extends that baseline.
 
 The installed Valve material import settings establish the shader parameter names.
 Minimal templates were checked through actual compilation, not guessed from binary
@@ -32,6 +32,41 @@ The model probe established exact physical bounds, material references, PHYS
 presence/absence, and LOD masks with Valve's reader. Image probes established
 straight color/alpha preservation and roughness packing. Detailed evidence is in
 the companion model and image documents.
+
+## Generic importer and blend refactor
+
+The 0.2.0 refactor's final opt-in run passed **301 tests**, with no skipped tests:
+
+```powershell
+$env:CS2ASSET_INTEGRATION = '1'
+uv run pytest -q
+```
+
+The new real-tool checks imported and rebuilt generated static models in all five
+supported formats (`.blend`, `.glb`, `.gltf`, `.fbx`, `.obj`), local HDR and EXR skies,
+and a conventional local PBR material directory. Valve's reader confirmed model
+bounds, material references, and collision data. A glTF packed PBR probe confirmed
+roughness from G and metalness from B. A model was reconverted from its verified
+snapshot after both its original Blender file and external image were removed.
+These checks used the dedicated `cs2asset_generic_validation` addon.
+
+A generated two-layer environment blend compiled successfully. Compiled material
+metadata advertises Hammer's two-layer painting controls, and extracted textures
+confirmed both layers' color, AO, roughness, height, and metalness values. The actual
+contract and remaining interactive acceptance checks are recorded in
+[blend validation](blend-validation.md). No interactive paint/render result is claimed.
+
+Fixture-based checks also cover local/provider/mixed blends, generic provenance,
+legacy-record rebuilds, ownership/recovery, ambiguous and unsupported inputs,
+same-named assets, forced identity collisions, Unicode/space-containing source
+filenames, cached-input integrity, and local dry-runs without writes or network calls.
+The three original Poly Haven examples were separately imported and rebuilt offline
+with the refactored pipeline, using their existing verified downloads.
+
+Ruff and `git diff --check` passed. Both 0.2.0 wheel and source-distribution builds
+passed, as did standalone `uvx --python 3.12 --isolated --from .` version and blend
+command checks. The existing cache/compiler/discovery components and publication
+journal remain in use; existing Poly Haven import IDs and resource paths are preserved.
 
 ## Real map build
 

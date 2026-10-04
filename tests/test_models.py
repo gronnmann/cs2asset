@@ -184,6 +184,16 @@ texture = material.node_tree.nodes.new('ShaderNodeTexImage')
 texture.image = image
 material.node_tree.links.new(texture.outputs['Color'], shader.inputs['Base Color'])
 material.node_tree.links.new(texture.outputs['Alpha'], shader.inputs['Alpha'])
+packed = bpy.data.images.new('PackedPBR', width=4, height=4, alpha=False, is_data=True)
+packed.pixels[:] = [0.9, 0.35, 0.7, 1] * 16
+packed.pack()
+pbr = material.node_tree.nodes.new('ShaderNodeTexImage')
+pbr.image = packed
+separate = material.node_tree.nodes.new('ShaderNodeSeparateColor')
+separate.mode = 'RGB'
+material.node_tree.links.new(pbr.outputs['Color'], separate.inputs['Color'])
+material.node_tree.links.new(separate.outputs['Green'], shader.inputs['Roughness'])
+material.node_tree.links.new(separate.outputs['Blue'], shader.inputs['Metallic'])
 bpy.ops.wm.save_as_mainfile(filepath={str(source)!r})
 noise = material.node_tree.nodes.new('ShaderNodeTexNoise')
 material.node_tree.links.new(noise.outputs['Color'], shader.inputs['Base Color'])
@@ -211,5 +221,11 @@ bpy.ops.wm.save_as_mainfile(filepath={str(bad_source)!r})
         0.25, abs=0.005
     )
     assert exported.materials[0].maps["base_color"].is_file()
+    assert read_image(exported.materials[0].maps["roughness"])[:, :, 0].mean() == pytest.approx(
+        0.35, abs=0.005
+    )
+    assert read_image(exported.materials[0].maps["metalness"])[:, :, 0].mean() == pytest.approx(
+        0.7, abs=0.005
+    )
     with pytest.raises(CS2AssetError, match="Unsupported procedural material node"):
         export_model(bad_source, tmp_path / "bad_export", blender)

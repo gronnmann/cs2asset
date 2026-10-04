@@ -21,12 +21,13 @@ from urllib.parse import urlsplit
 import httpx
 from filelock import FileLock, Timeout
 
+from cs2asset import __version__
 from cs2asset.errors import CS2AssetError
 
 if TYPE_CHECKING:
     from cs2asset.provider import DownloadFile
 
-USER_AGENT = "cs2asset/0.1.0"
+USER_AGENT = f"cs2asset/{__version__}"
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
 
 

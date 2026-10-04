@@ -12,6 +12,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from . import __version__
+from .assets import MaterialInput, ModelInput, NormalizedAsset, ResolvedAsset, SkyInput
 from .cache import DownloadCache
 from .compiler import compile_resources
 from .config import atomic_json, read_json
@@ -21,7 +22,10 @@ from .images import read_image, write_image
 from .installer import Installer, contained_path, file_hash
 from .materials import TEMPLATE_VERSION, create_material, create_sky
 from .models import MODEL_CONVERTER_VERSION, export_model, write_modeldoc
-from .provider import PolyHavenProvider, ResolvedAsset
+from .sources import canonical_source, record_source, source_provider
+from .sources.base import input_path
+from .sources.local import SnapshotProvider
+from .sources.polyhaven import adapt_resolved
 
 
 @dataclass(frozen=True)
@@ -56,17 +60,170 @@ class ImportOptions:
 
 
 def plan_import(resolved: ResolvedAsset, options: ImportOptions) -> dict:
+    resolved = adapt_resolved(resolved)
     return {
-        "provider": "Poly Haven",
+        "provider": "Poly Haven"
+        if resolved.source.provider == "polyhaven"
+        else resolved.source.provider,
+        "source": asdict(resolved.source),
+        "kind": resolved.asset.kind,
         "asset": resolved.asset.id,
         "name": resolved.asset.name,
         "type": resolved.asset.type,
         "resolution": resolved.resolution,
-        "download_bytes": resolved.total_size,
+        "download_bytes": resolved.download_size,
+        "input_bytes": resolved.total_size,
         "files": [asdict(f) for f in resolved.files],
         "choices": resolved.choices,
         "options": asdict(options),
         "warnings": list(resolved.warnings),
+    }
+
+
+def _variant(resolved, options):
+    digest = hashlib.sha256(json.dumps(asdict(options), sort_keys=True).encode()).hexdigest()[:10]
+    return f"{resolved.resolution}_{digest}"
+
+
+def convert_asset(
+    normalized: NormalizedAsset,
+    content: Path,
+    build: Path,
+    variant: str,
+    options: ImportOptions,
+    blender: Path | None,
+) -> dict:
+    """Source-independent conversion: only normalized local inputs cross this boundary."""
+    resolved = normalized.resolved
+    namespace = resolved.namespace
+    warnings, detail, resources = list(resolved.warnings), {}, []
+    payload = normalized.input
+    if isinstance(payload, MaterialInput):
+        maps = material_maps(normalized, build)
+        resource_dir = f"materials/cs2asset/{namespace}/{variant}"
+        material, notes = create_material(
+            content,
+            resource_dir,
+            maps,
+            normal_format=options.normal_format or payload.normal_format,
+            constants=payload.constants,
+            surface=options.surface,
+            tiling=options.tiling,
+        )
+        warnings.extend(notes)
+        resources.append(material.relative_to(content).as_posix())
+    elif isinstance(payload, SkyInput):
+        inputs = _limit_maps({"hdri": payload.path}, resolved, build / "resized")
+        material, detail = create_sky(
+            content,
+            f"materials/skybox/cs2asset/{namespace}/{variant}",
+            inputs["hdri"],
+            yaw=options.yaw,
+            exposure=options.exposure,
+        )
+        resources.append(material.relative_to(content).as_posix())
+    elif isinstance(payload, ModelInput):
+        kwargs = {"scale": options.scale}
+        if payload.dependency_remap:
+            kwargs["dependency_remap"] = payload.dependency_remap
+        exported = export_model(payload.path, build / "model", blender, **kwargs)
+        warnings.extend(exported.warnings)
+        remaps = {}
+        for index, material in enumerate(exported.materials):
+            directory = f"materials/cs2asset/{namespace}/{variant}/m{index:03d}"
+            maps = {("base_color" if k == "color" else k): v for k, v in material.maps.items()}
+            maps = _limit_maps(maps, resolved, build / "resized" / f"m{index:03d}")
+            constants = {
+                ("base_color" if k == "color" else k): v for k, v in material.constants.items()
+            }
+            generated, notes = create_material(
+                content,
+                directory,
+                maps,
+                constants=constants,
+                surface=options.surface,
+                tiling=options.tiling,
+                normal_format=options.normal_format or "gl",
+            )
+            remaps[material.name] = generated.relative_to(content).as_posix()
+            warnings.extend(material.warnings + notes)
+        directory = f"models/cs2asset/{namespace}/{variant}"
+        target = content / directory
+        target.mkdir(parents=True, exist_ok=True)
+        lod_resources = {}
+        for level, fbx in exported.lods.items():
+            filename = "mesh.fbx" if level == 0 else f"mesh_lod{level}.fbx"
+            shutil.copy2(fbx, target / filename)
+            lod_resources[level] = f"{directory}/{filename}"
+        model = write_modeldoc(
+            target / "model.vmdl",
+            f"{directory}/mesh.fbx",
+            remaps,
+            collision=options.collision,
+            surface_prop=options.surface,
+            lod_resources=lod_resources,
+        )
+        resources.append(model.relative_to(content).as_posix())
+        detail = {
+            "dimensions_units": exported.dimensions_units,
+            "mesh_count": exported.mesh_count,
+            "triangle_count": exported.triangle_count,
+            "collision": options.collision,
+            "blender_version": exported.blender_version,
+            "lod_levels": sorted(exported.lods),
+        }
+        dimensions = resolved.asset.metadata.get("dimensions")
+        if dimensions and dimensions["unit"] == "mm" and len(dimensions["values"]) == 3:
+            expected = [d / 25.4 * options.scale for d in dimensions["values"]]
+            if any(
+                abs(a - e) > max(0.1, e * 0.15)
+                for a, e in zip(sorted(exported.dimensions_units), sorted(expected))
+            ):
+                warnings.append(
+                    f"Model dimensions differ from source metadata: exported {exported.dimensions_units}, "
+                    f"expected {expected} inches"
+                )
+    else:
+        raise CS2AssetError("Unsupported normalized asset input")
+    return {
+        "resources": resources,
+        "warnings": warnings,
+        "detail": detail,
+        "content_hashes": {p: file_hash(f) for p, f in _file_set(content).items()},
+        "input_sha256": normalized.input_sha256,
+        "snapshot": normalized.snapshot,
+    }
+
+
+def material_maps(normalized, build):
+    """Resolve known channel layouts and resolution consistently for both material paths."""
+    payload = normalized.input
+    maps = dict(payload.maps)
+    for packed_role, layout in payload.packed_layouts.items():
+        packed = read_image(maps[packed_role])
+        if packed.shape[2] < len(layout):
+            raise CS2AssetError("ARM map requires three channels (AO, roughness, metalness)")
+        for index, role in enumerate(layout):
+            if role not in maps:
+                maps[role] = write_image(
+                    build / "unpacked" / f"{role}.png", packed[:, :, index : index + 1]
+                )
+    return _limit_maps(maps, normalized.resolved, build / "resized")
+
+
+def _limit_maps(maps, resolved, destination):
+    from .images import resize_image
+
+    limit = resolved.choices.get("max_dimension")
+    if not limit:
+        return maps
+    return {
+        key: resize_image(
+            path,
+            destination / (key + (".exr" if path.suffix.lower() in {".hdr", ".exr"} else ".png")),
+            limit,
+        )
+        for key, path in maps.items()
     }
 
 
@@ -90,7 +247,7 @@ def _tool_fingerprint(installation: Installation, blender: Path | None) -> dict:
         "blender": identity(blender),
         "converter_sources": {
             name: file_hash(Path(__file__).with_name(name))
-            for name in ("images.py", "materials.py", "models.py", "blender_worker.py")
+            for name in ("images.py", "materials.py", "models.py", "blender_worker.py", "pipeline.py")
         },
     }
 
@@ -115,6 +272,15 @@ def _converted_valid(converted: dict, content: Path) -> bool:
             return False
         if not path.is_file() or file_hash(path) != digest:
             return False
+    snapshots = converted.get("snapshots", [converted.get("snapshot", {})])
+    for snapshot in snapshots:
+        if not snapshot:
+            continue
+        root = Path(snapshot["root"])
+        for item in snapshot["resolved"]["files"]:
+            path = input_path(root, item["relative_path"])
+            if not path.is_file() or file_hash(path) != item["sha256"]:
+                return False
     return True
 
 
@@ -152,7 +318,7 @@ def _stage(installation: Installation, fingerprint: str):
 def import_asset(
     installation: Installation,
     project: Project,
-    provider: PolyHavenProvider,
+    provider,
     cache: Path,
     asset: str,
     options: ImportOptions,
@@ -165,25 +331,40 @@ def import_asset(
     phase=None,
     download_progress=None,
     compiler_progress=None,
+    asset_type: str | None = None,
 ) -> dict:
     options.validate()
     announce = phase or (lambda message: None)
-    announce("Resolving Poly Haven asset")
-    resolved = provider.resolve_files(asset, options.resolution, refresh=refresh)
+    announce("Resolving asset source")
+    source = source_provider(
+        provider, asset, cache, downloader=DownloadCache, progress=download_progress
+    )
+    resolved = source.resolve(asset, options.resolution, refresh=refresh, asset_type=asset_type)
     effective = ImportOptions(**{**asdict(options), "resolution": resolved.resolution})
     description = plan_import(resolved, effective)
+    variant = _variant(resolved, effective)
     if dry_run:
-        return {**description, "project": project.name, "dry_run": True}
+        return {
+            **description,
+            "project": project.name,
+            "dry_run": True,
+            "variant": variant,
+            "namespace": resolved.namespace,
+        }
     announce(
-        f"Poly Haven: {resolved.asset.name} ({resolved.resolution}); "
+        f"{description['provider']}: {resolved.asset.name} ({resolved.resolution}); "
         f"{resolved.total_size / 1048576:.1f} MiB selected"
     )
     if resolved.asset.type == "models":
         blender = discover_blender(blender)
         if blender is None:
             raise CS2AssetError("Blender is required for models. Install Blender or set --blender.")
+    resolved = source.prepare(resolved, blender=blender)
+    description = plan_import(resolved, effective)
     tools = _tool_fingerprint(installation, blender if resolved.asset.type == "models" else None)
     identity = {
+        "source": asdict(resolved.source),
+        "namespace": resolved.namespace,
         "asset": resolved.asset.id,
         "type": resolved.asset.type,
         "files": [asdict(f) for f in resolved.files],
@@ -193,11 +374,7 @@ def import_asset(
     }
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     # Variant identity depends on user settings, so a tool update rebuilds in place.
-    variant_hash = hashlib.sha256(
-        json.dumps(asdict(effective), sort_keys=True).encode()
-    ).hexdigest()[:10]
-    variant = f"{resolved.resolution}_{variant_hash}"
-    import_id = f"polyhaven:{resolved.asset.id}:{variant}"
+    import_id = f"{resolved.identity}:{variant}"
     build = cache / "builds" / fingerprint
     build.mkdir(parents=True, exist_ok=True)
     stage_parent = installation.content_dir / "csgo_addons"
@@ -210,127 +387,10 @@ def import_asset(
         reusable = _converted_valid(converted, content)
         if not reusable:
             _clear_owned_stage(content, game)
-            announce("Downloading selected files and dependencies")
-            with DownloadCache(
-                cache, progress=download_progress, offline=provider.offline
-            ) as downloader:
-                inputs = downloader.materialize(resolved.files, build / "inputs")
-            input_hashes = {role: file_hash(path) for role, path in inputs.items()}
+            announce("Reading selected files and dependencies")
+            normalized = source.materialize(resolved, build / "inputs")
             announce("Converting source assets")
-            warnings = list(resolved.warnings)
-            detail = {}
-            resources = []
-            if resolved.asset.type == "textures":
-                maps = dict(inputs)
-                if "arm" in maps:
-                    packed = read_image(maps["arm"])
-                    if packed.shape[2] < 3:
-                        raise CS2AssetError(
-                            "ARM map requires three channels (AO, roughness, metalness)"
-                        )
-                    for index, role in enumerate(("ao", "roughness", "metalness")):
-                        if role not in maps:
-                            maps[role] = write_image(
-                                build / "unpacked" / f"{role}.png", packed[:, :, index : index + 1]
-                            )
-                resource_dir = f"materials/cs2asset/polyhaven/{resolved.asset.id}/{variant}"
-                normal = effective.normal_format or (
-                    "dx" if resolved.choices.get("normal_convention") == "directx" else "gl"
-                )
-                material, notes = create_material(
-                    content,
-                    resource_dir,
-                    maps,
-                    normal_format=normal,
-                    surface=effective.surface,
-                    tiling=effective.tiling,
-                )
-                warnings.extend(notes)
-                resources.append(material.relative_to(content).as_posix())
-            elif resolved.asset.type == "hdris":
-                resource_dir = f"materials/skybox/cs2asset/polyhaven/{resolved.asset.id}/{variant}"
-                material, detail = create_sky(
-                    content,
-                    resource_dir,
-                    inputs["hdri"],
-                    yaw=effective.yaw,
-                    exposure=effective.exposure,
-                )
-                resources.append(material.relative_to(content).as_posix())
-            else:
-                exported = export_model(
-                    inputs["model"], build / "model", blender, scale=effective.scale
-                )
-                warnings.extend(exported.warnings)
-                remaps = {}
-                for index, material in enumerate(exported.materials):
-                    directory = (
-                        f"materials/cs2asset/polyhaven/{resolved.asset.id}/{variant}/m{index:03d}"
-                    )
-                    maps = {
-                        ("base_color" if k == "color" else k): v for k, v in material.maps.items()
-                    }
-                    constants = {
-                        ("base_color" if k == "color" else k): v
-                        for k, v in material.constants.items()
-                    }
-                    generated, notes = create_material(
-                        content,
-                        directory,
-                        maps,
-                        constants=constants,
-                        surface=effective.surface,
-                        tiling=effective.tiling,
-                        normal_format=effective.normal_format or "gl",
-                    )
-                    remaps[material.name] = generated.relative_to(content).as_posix()
-                    warnings.extend(material.warnings + notes)
-                directory = f"models/cs2asset/polyhaven/{resolved.asset.id}/{variant}"
-                target = content / directory
-                target.mkdir(parents=True, exist_ok=True)
-                lod_resources = {}
-                for level, fbx in exported.lods.items():
-                    filename = "mesh.fbx" if level == 0 else f"mesh_lod{level}.fbx"
-                    shutil.copy2(fbx, target / filename)
-                    lod_resources[level] = f"{directory}/{filename}"
-                model = write_modeldoc(
-                    target / "model.vmdl",
-                    f"{directory}/mesh.fbx",
-                    remaps,
-                    collision=effective.collision,
-                    surface_prop=effective.surface,
-                    lod_resources=lod_resources,
-                )
-                resources.append(model.relative_to(content).as_posix())
-                detail = {
-                    "dimensions_units": exported.dimensions_units,
-                    "mesh_count": exported.mesh_count,
-                    "triangle_count": exported.triangle_count,
-                    "collision": effective.collision,
-                    "blender_version": exported.blender_version,
-                    "lod_levels": sorted(exported.lods),
-                }
-                if resolved.asset.dimensions and len(resolved.asset.dimensions) == 3:
-                    expected = [d / 25.4 * effective.scale for d in resolved.asset.dimensions]
-                    actual_sorted, expected_sorted = (
-                        sorted(exported.dimensions_units),
-                        sorted(expected),
-                    )
-                    if any(
-                        abs(a - e) > max(0.1, e * 0.15)
-                        for a, e in zip(actual_sorted, expected_sorted)
-                    ):
-                        warnings.append(
-                            f"Model dimensions differ from Poly Haven metadata: "
-                            f"exported {exported.dimensions_units}, expected {expected} inches"
-                        )
-            converted = {
-                "resources": resources,
-                "warnings": warnings,
-                "detail": detail,
-                "content_hashes": {p: file_hash(f) for p, f in _file_set(content).items()},
-                "input_sha256": input_hashes,
-            }
+            converted = convert_asset(normalized, content, build, variant, effective, blender)
             atomic_json(ready_path, converted)
         else:
             announce("Reusing verified converted sources")
@@ -349,9 +409,12 @@ def import_asset(
             **description,
             "fingerprint": fingerprint,
             "variant": variant,
-            "source_url": resolved.asset.source_url,
-            "authors": resolved.asset.authors,
-            "dimensions_mm": resolved.asset.dimensions,
+            "record_version": 2,
+            "source_url": resolved.asset.metadata.get("source_url"),
+            "authors": resolved.asset.metadata.get("authors", {}),
+            "dimensions": resolved.asset.metadata.get("dimensions"),
+            "dimensions_mm": (resolved.asset.metadata.get("dimensions") or {}).get("values"),
+            "snapshot": converted.get("snapshot", {}),
             "tools": tools,
             "input_sha256": converted.get("input_sha256", {}),
             "resources": converted["resources"],
@@ -361,36 +424,66 @@ def import_asset(
             "compiler_help": executable_version(installation.compiler, ("-help",)),
         }
         content_outputs = {
-            relative: contained_path(content, relative)
-            for relative in converted["content_hashes"]
+            relative: contained_path(content, relative) for relative in converted["content_hashes"]
         }
         return Installer(project).install(
             import_id, content_outputs, compiled, metadata, overwrite=overwrite
         )
 
 
-def rebuild_asset(installation, project, provider, cache, asset, *, variant=None, **kwargs):
-    from .provider import parse_asset_id
+def rebuild_asset(
+    installation, project, provider, cache, asset, *, variant=None, cached_inputs=False, **kwargs
+):
+    import os
 
-    asset_id = parse_asset_id(asset)
-    records = [
-        r
-        for r in Installer(project).imports().values()
-        if r.get("asset") == asset_id and (variant is None or r.get("variant") == variant)
-    ]
-    if not records:
+    records = Installer(project).imports()
+    if asset in records:
+        selected = [records[asset]]
+    else:
+        uri = canonical_source(asset)
+        selected = [
+            record
+            for record in records.values()
+            if record.get("type") != "blend"
+            and os.path.normcase(record_source(record)["uri"]) == os.path.normcase(uri)
+        ]
+    selected = [r for r in selected if variant is None or r.get("variant") == variant]
+    if not selected:
         raise CS2AssetError(
-            f"No installed import found for {asset_id}" + (f" variant {variant}" if variant else "")
+            f"No installed import found for {asset}" + (f" variant {variant}" if variant else "")
         )
-    return [
-        import_asset(
-            installation,
-            project,
-            provider,
-            cache,
-            asset_id,
-            ImportOptions(**record["options"]),
-            **kwargs,
+    results = []
+    for record in selected:
+        if record.get("type") == "blend":
+            from .blend import rebuild_blend
+
+            results.append(
+                rebuild_blend(
+                    installation,
+                    project,
+                    provider,
+                    cache,
+                    record,
+                    cached_inputs=cached_inputs,
+                    **kwargs,
+                )
+            )
+            continue
+        source = record_source(record)
+        chosen_provider = provider
+        if cached_inputs and source["provider"] == "local":
+            if not record.get("snapshot"):
+                raise CS2AssetError("This import has no retained input snapshot")
+            chosen_provider = SnapshotProvider(record["snapshot"])
+        results.append(
+            import_asset(
+                installation,
+                project,
+                chosen_provider,
+                cache,
+                source["uri"],
+                ImportOptions(**record["options"]),
+                **kwargs,
+            )
         )
-        for record in records
-    ]
+    return results

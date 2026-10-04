@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import sys
 import traceback
@@ -37,7 +38,22 @@ def source_image(socket, *, normal=False):
     node = link.from_node
     if node.type == "REROUTE":
         return source_image(node.inputs[0], normal=normal)
+    if node.type in {"SEPRGB", "SEPARATE_COLOR"}:
+        if getattr(node, "mode", "RGB") != "RGB" or normal:
+            raise RuntimeError("Only RGB channel separation for scalar PBR maps is supported")
+        source = source_image(node.inputs[0])
+        if source is None or source[1] != "Color":
+            raise RuntimeError("Channel separation must read a conventional image Color output")
+        return source[0], {"R": "Red", "G": "Green", "B": "Blue"}.get(
+            link.from_socket.name, link.from_socket.name
+        )
     if normal and node.type == "NORMAL_MAP":
+        # Blender's FBX importer creates a disabled normal node even without a map.
+        if (
+            not node.inputs["Strength"].is_linked
+            and abs(node.inputs["Strength"].default_value) < 1e-6
+        ):
+            return None
         if node.space != "TANGENT" or node.inputs["Strength"].is_linked:
             raise RuntimeError(
                 "Only tangent-space normal maps with constant strength are supported"
@@ -98,6 +114,28 @@ def alpha_path(image, output: Path, index: int) -> str:
     extracted.colorspace_settings.name = "Non-Color"
     extracted.pixels.foreach_set(rgba.ravel())
     target = output / "embedded" / f"alpha_{index:03d}.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    extracted.filepath_raw, extracted.file_format = str(target), "PNG"
+    extracted.save()
+    bpy.data.images.remove(extracted)
+    return str(target.resolve())
+
+
+def scalar_path(image, output: Path, index: int, channel: str) -> str:
+    """Extract explicitly connected channels, such as glTF roughness G/metalness B."""
+    if channel == "Alpha":
+        return alpha_path(image, output, index)
+    width, height = image.size
+    pixels = np.empty(width * height * 4, dtype=np.float32)
+    image.pixels.foreach_get(pixels)
+    channel_index = {"Red": 0, "Green": 1, "Blue": 2}[channel]
+    values = pixels.reshape(-1, 4)[:, channel_index]
+    rgba = np.ones((width * height, 4), dtype=np.float32)
+    rgba[:, :3] = values[:, None]
+    extracted = bpy.data.images.new(f"scalar_{index}", width=width, height=height, alpha=False)
+    extracted.colorspace_settings.name = "Non-Color"
+    extracted.pixels.foreach_set(rgba.ravel())
+    target = output / "embedded" / f"{channel.lower()}_{index:03d}.png"
     target.parent.mkdir(parents=True, exist_ok=True)
     extracted.filepath_raw, extracted.file_format = str(target), "PNG"
     extracted.save()
@@ -168,10 +206,18 @@ def material_info(material, index: int, output: Path) -> dict:
             raise RuntimeError(f"Material {source_name!r}, {name}: {exc}") from exc
         if source:
             image, channel = source
+            if channel in {"Red", "Green", "Blue"} and semantic not in {
+                "roughness",
+                "metalness",
+                "opacity",
+            }:
+                raise RuntimeError(
+                    f"Material {source_name!r}: channel extraction for {semantic} requires baking"
+                )
             image_index = index * 10 + len(result["maps"])
             result["maps"][semantic] = (
-                alpha_path(image, output, image_index)
-                if channel == "Alpha"
+                scalar_path(image, output, image_index, channel)
+                if channel in {"Red", "Green", "Blue", "Alpha"}
                 else image_path(image, output, image_index)
             )
         elif semantic != "normal":
@@ -187,8 +233,8 @@ def material_info(material, index: int, output: Path) -> dict:
     return result
 
 
-def main(job: dict) -> dict:
-    source, output = Path(job["source"]), Path(job["output_dir"])
+def load_source(job: dict):
+    source = Path(job["source"])
     suffix = source.suffix.lower()
     if suffix == ".blend":
         bpy.ops.wm.open_mainfile(filepath=str(source), load_ui=False, use_scripts=False)
@@ -202,6 +248,42 @@ def main(job: dict) -> dict:
             bpy.ops.wm.obj_import(filepath=str(source))
         else:
             raise RuntimeError(f"Unsupported input format: {suffix}")
+    if job.get("operation") == "inspect" and bpy.data.libraries:
+        raise RuntimeError(
+            "Linked Blender libraries are unsupported for local snapshots; make linked data local first"
+        )
+    remap = job.get("dependency_remap", {})
+    for image in bpy.data.images:
+        if image.packed_file or image.source != "FILE":
+            continue
+        original = os.path.normcase(
+            str(Path(bpy.path.abspath(image.filepath, library=image.library)).resolve())
+        )
+        if original in remap:
+            image.filepath = remap[original]
+            image.reload()
+
+
+def inspect_dependencies(job: dict) -> dict:
+    load_source(job)
+    dependencies = set()
+    for image in bpy.data.images:
+        if image.packed_file or image.source != "FILE" or not image.users:
+            continue
+        path = Path(bpy.path.abspath(image.filepath, library=image.library)).resolve()
+        if not path.is_file():
+            raise RuntimeError(
+                f"Model {job['source']} references missing image {image.name!r}: {path}"
+            )
+        dependencies.add(str(path))
+    return {"dependencies": sorted(dependencies)}
+
+
+def main(job: dict) -> dict:
+    if job.get("operation") == "inspect":
+        return inspect_dependencies(job)
+    load_source(job)
+    output = Path(job["output_dir"])
     scene = bpy.context.scene
     warnings = []
     if any(o.type == "ARMATURE" for o in scene.objects):

@@ -122,7 +122,7 @@ def test_json_error_with_verbose_is_still_json(metadata):
 
 def test_command_local_json_error(metadata):
     data, _ = invoke_json(["info", "bad:asset", "--offline", "--json"], exit_code=1)
-    assert "Invalid Poly Haven asset ID" in data["error"]
+    assert "Unsupported source provider" in data["error"]
 
 
 def test_dry_run_resolves_without_source_or_project_writes(install, metadata):
@@ -257,3 +257,117 @@ def test_doctor_json_reports_capabilities_without_blender(install, monkeypatch):
 def test_search_without_query_lists_cached_catalog(metadata):
     data, _ = invoke_json(["search", "--offline", "--json"])
     assert len(data) == 3
+
+
+@pytest.mark.parametrize("kind", ["material", "model", "sky"])
+def test_local_cli_dry_run_has_generic_provenance_and_no_writes(install, tmp_path, kind):
+    import numpy as np
+
+    from cs2asset.images import write_image
+
+    if kind == "material":
+        source = tmp_path / "forest ground"
+        write_image(source / "forest_albedo.png", np.ones((4, 4, 3)))
+    elif kind == "model":
+        source = tmp_path / "rock.glb"
+        source.write_bytes(b"dry-run does not invoke Blender")
+    else:
+        source = write_image(tmp_path / "sky.exr", np.full((4, 8, 3), 4), hdr=True)
+    before = sorted(str(p) for p in install.rglob("*"))
+    data, _ = invoke_json(
+        ["import", str(source), "--project", "de_first", "--type", kind, "--dry-run", "--json"]
+    )
+    assert data["source"]["provider"] == "local"
+    assert data["source"]["uri"] == str(source.resolve())
+    assert data["kind"] == kind
+    assert data["resolution"] == "native"
+    assert data["download_bytes"] == 0
+    assert sorted(str(p) for p in install.rglob("*")) == before
+    assert not cache_dir().exists()
+    assert not user_config_path().exists()
+
+
+def test_local_info_needs_no_workshop_install(tmp_path):
+    import numpy as np
+
+    from cs2asset.images import write_image
+
+    source = write_image(tmp_path / "sky.exr", np.ones((4, 8, 3)), hdr=True)
+    data, _ = invoke_json(["info", str(source), "--json"])
+    assert data["kind"] == "sky"
+    assert data["source"]["provider"] == "local"
+    assert not cache_dir().exists()
+
+
+def test_search_explicit_provider_and_unsupported_search(metadata):
+    data, _ = invoke_json(["search", "football", "--provider", "polyhaven", "--offline", "--json"])
+    assert data[0]["id"] == "dirty_football"
+    data, _ = invoke_json(["search", "rock", "--provider", "local", "--json"], exit_code=1)
+    assert "does not support search" in data["error"]
+
+
+def test_local_missing_path_does_not_attempt_polyhaven(install, tmp_path):
+    data, _ = invoke_json(
+        ["import", str(tmp_path / "missing.glb"), "--project", "de_first", "--dry-run", "--json"],
+        exit_code=1,
+    )
+    assert "Local source does not exist" in data["error"]
+
+
+def test_blend_cli_dry_run_supports_mixed_sources(install, metadata, tmp_path):
+    import numpy as np
+
+    from cs2asset.images import write_image
+
+    source = tmp_path / "rock"
+    write_image(source / "rock_albedo.png", np.ones((4, 4, 3)))
+    data, _ = invoke_json(
+        [
+            "blend",
+            "create",
+            str(source),
+            "polyhaven:concrete_floor_01",
+            "--name",
+            "forest_rock",
+            "--resolution",
+            "1k",
+            "--offline",
+            "--project",
+            "de_first",
+            "--dry-run",
+            "--json",
+        ]
+    )
+    assert [s["provider"] for s in data["sources"]] == ["local", "polyhaven"]
+    assert data["experimental"]
+    assert data["validation"]["hammer_paint_verified"] is False
+    assert data["planned_resources"][0].endswith("blend.vmat")
+    assert not (cache_dir() / "builds").exists()
+
+
+def test_blend_terminal_preview_shows_layers_and_validation_limit(install, tmp_path):
+    import numpy as np
+
+    from cs2asset.images import write_image
+
+    inputs = [tmp_path / "forest", tmp_path / "rock"]
+    for folder in inputs:
+        write_image(folder / "albedo.png", np.ones((4, 4, 3)))
+    result = runner.invoke(
+        app,
+        [
+            "blend",
+            "create",
+            *map(str, inputs),
+            "--name",
+            "forest_rock",
+            "--project",
+            "de_first",
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Layer 1:" in result.output and "Layer 2:" in result.output
+    assert "Experimental environment blend" in result.output
+    assert "unverified" in result.output
+    assert "blend.vmat" in "".join(result.output.split())

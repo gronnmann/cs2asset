@@ -1,7 +1,7 @@
 [project]
 name = "cs2asset"
-version = "0.1.0"
-description = "Import Poly Haven assets into Counter-Strike 2 Hammer addons"
+version = "0.2.0"
+description = "Convert local and provider textures, HDR skies, and static models into CS2 Hammer resources"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = ["typer>=0.16,<1", "rich>=14,<15", "httpx>=0.28,<1", "numpy>=2,<3", "OpenImageIO>=3,<4", "platformdirs>=4,<5", "vdf>=3.4,<4", "filelock>=3,<4"]
@@ -23,4 +23,3 @@ markers = ["integration: requires local CS2 Workshop Tools and/or Blender"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-
