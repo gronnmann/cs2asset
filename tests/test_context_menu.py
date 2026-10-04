@@ -1,11 +1,11 @@
+import io
 from contextlib import nullcontext
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
 from cs2asset import context_menu
-from cs2asset.cli import app, context_menu_import_file
+from cs2asset.cli import app
 from cs2asset.errors import CS2AssetError
 
 
@@ -73,17 +73,32 @@ def test_non_windows_is_a_cli_error(monkeypatch):
     assert "only supported on Windows" in result.stdout
 
 
-def test_explorer_import_waits_even_after_failure(monkeypatch):
+@pytest.mark.parametrize("failure", [None, CS2AssetError("import failed"), RuntimeError("unexpected failure")])
+def test_explorer_import_displays_result_before_pause(monkeypatch, failure):
     calls = []
 
-    def failed_import(*args, **kwargs):
-        calls.append(kwargs["asset"])
-        raise CS2AssetError("import failed")
+    class TerminalInput(io.StringIO):
+        def isatty(self):
+            return True
 
-    monkeypatch.setattr("cs2asset.cli.import_command", failed_import)
-    monkeypatch.setattr("cs2asset.cli.sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt))
-    ctx = SimpleNamespace(invoke=lambda fn, **kwargs: fn(**kwargs))
-    with pytest.raises(CS2AssetError, match="import failed"):
-        context_menu_import_file(ctx, "C:/rock.glb")
-    assert calls == ["C:/rock.glb", "Press Enter to close..."]
+    def perform(ctx, project, json, offline, operation, **kwargs):
+        assert ctx.obj["project"] == "de_example"
+        monkeypatch.setattr("cs2asset.cli.sys.stdin", TerminalInput())
+        if failure:
+            raise failure
+        return {"result": "import completed"}
+
+    def pause(prompt):
+        calls.append(prompt)
+        print(prompt)
+
+    monkeypatch.setattr("cs2asset.cli._perform", perform)
+    monkeypatch.setattr("builtins.input", pause)
+    result = CliRunner().invoke(
+        app, ["--project", "de_example", "context-menu", "import-file", "C:/rock.glb"]
+    )
+    assert result.exit_code == (1 if failure else 0), result.output
+    message = str(failure) if failure else "import completed"
+    assert message in result.output
+    assert result.output.index(message) < result.output.index("Press Enter to close...")
+    assert calls == ["Press Enter to close..."]

@@ -203,7 +203,13 @@ def context_menu_status(ctx: typer.Context, json: bool = False):
 def context_menu_import_file(ctx: typer.Context, asset: str):
     """Import an Explorer-selected file and keep the console result visible."""
     try:
-        ctx.invoke(import_command, asset=asset)
+        import_command(ctx, asset=asset)
+    except typer.Exit:
+        raise
+    except Exception:  # noqa: BLE001 -- Explorer must display failures before its window closes.
+        # Render unexpected failures before the pause, rather than after window closure.
+        errors.print_exception(show_locals=False)
+        raise typer.Exit(1)
     finally:
         if sys.stdin.isatty():
             try:
