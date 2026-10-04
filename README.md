@@ -26,22 +26,24 @@ Blender is used internally for conversion and inspection, including the model pi
 
 The examples in this README use [uv](https://docs.astral.sh/uv/), but `cs2asset` is a normal Python package and does not depend on `uv` specifically.
 
-From the repository:
+Run the published package directly without cloning this repository:
 
 ```powershell
-uv sync
+uvx --python 3.12 cs2asset --help
 ```
+
+Python 3.12 is selected explicitly because `cs2asset` supports Python 3.12 and 3.13.
 
 Check that `cs2asset` can find CS2, Valve's tools, Blender, and your addons:
 
 ```powershell
-uv run cs2asset doctor
+uvx --python 3.12 cs2asset doctor
 ```
 
 Then select the addon you want to import assets into:
 
 ```powershell
-uv run cs2asset init
+uvx --python 3.12 cs2asset init
 ```
 
 `init` remembers the selected addon for future commands.
@@ -53,17 +55,17 @@ Create new addons through CS2 Workshop Tools before selecting them in `cs2asset`
 Import local assets:
 
 ```powershell
-uv run cs2asset import .\assets\mossy_rock.glb
-uv run cs2asset import .\assets\forest_ground\
-uv run cs2asset import .\assets\sunset.hdr
+uvx --python 3.12 cs2asset import .\assets\mossy_rock.glb
+uvx --python 3.12 cs2asset import .\assets\forest_ground\
+uvx --python 3.12 cs2asset import .\assets\sunset.hdr
 ```
 
 Or import directly from Poly Haven:
 
 ```powershell
-uv run cs2asset import polyhaven:concrete_floor_01 --resolution 2k
-uv run cs2asset import polyhaven:sunset_jhbcentral --resolution 4k
-uv run cs2asset import polyhaven:dirty_football --resolution 2k
+uvx --python 3.12 cs2asset import polyhaven:concrete_floor_01 --resolution 2k
+uvx --python 3.12 cs2asset import polyhaven:sunset_jhbcentral --resolution 4k
+uvx --python 3.12 cs2asset import polyhaven:dirty_football --resolution 2k
 ```
 
 After an import, `cs2asset` prints the final Source 2 resource path. Use that path directly in Hammer's Asset Browser.
@@ -77,37 +79,37 @@ Poly Haven is the easiest way to get usable materials, HDRIs, and models into Ha
 Search for assets from the CLI:
 
 ```powershell
-uv run cs2asset search "forest ground" --provider polyhaven
-uv run cs2asset search "mossy rock" --provider polyhaven --type models
-uv run cs2asset search "sunset" --provider polyhaven --type hdris
+uvx --python 3.12 cs2asset search "forest ground" --provider polyhaven
+uvx --python 3.12 cs2asset search "mossy rock" --provider polyhaven --type models
+uvx --python 3.12 cs2asset search "sunset" --provider polyhaven --type hdris
 ```
 
 Then import an asset by ID:
 
 ```powershell
-uv run cs2asset import polyhaven:forest_ground_04
-uv run cs2asset import polyhaven:dirty_football
-uv run cs2asset import polyhaven:sunset_jhbcentral
+uvx --python 3.12 cs2asset import polyhaven:forest_ground_04
+uvx --python 3.12 cs2asset import polyhaven:dirty_football
+uvx --python 3.12 cs2asset import polyhaven:sunset_jhbcentral
 ```
 
 You can also paste a Poly Haven asset URL directly:
 
 ```powershell
-uv run cs2asset import https://polyhaven.com/a/concrete_floor_01
+uvx --python 3.12 cs2asset import https://polyhaven.com/a/concrete_floor_01
 ```
 
 Inspect what will be imported before doing anything:
 
 ```powershell
-uv run cs2asset info polyhaven:concrete_floor_01
+uvx --python 3.12 cs2asset info polyhaven:concrete_floor_01
 ```
 
 Choose a resolution:
 
 ```powershell
-uv run cs2asset import polyhaven:concrete_floor_01 --resolution 1k
-uv run cs2asset import polyhaven:concrete_floor_01 --resolution 2k
-uv run cs2asset import polyhaven:sunset_jhbcentral --resolution 4k
+uvx --python 3.12 cs2asset import polyhaven:concrete_floor_01 --resolution 1k
+uvx --python 3.12 cs2asset import polyhaven:concrete_floor_01 --resolution 2k
+uvx --python 3.12 cs2asset import polyhaven:sunset_jhbcentral --resolution 4k
 ```
 
 Default Poly Haven resolutions are:
@@ -121,14 +123,14 @@ If a requested resolution does not exist, `cs2asset` reports the available choic
 Once imported, the asset behaves like any other local `cs2asset` import and can be listed or rebuilt:
 
 ```powershell
-uv run cs2asset list
-uv run cs2asset rebuild IMPORT_ID
+uvx --python 3.12 cs2asset list
+uvx --python 3.12 cs2asset rebuild IMPORT_ID
 ```
 
 Cached Poly Haven assets can also be rebuilt offline:
 
 ```powershell
-uv run cs2asset rebuild IMPORT_ID --offline
+uvx --python 3.12 cs2asset rebuild IMPORT_ID --offline
 ```
 
 Poly Haven assets are CC0.
@@ -154,9 +156,9 @@ Poly Haven assets are CC0.
 You can require a specific asset type with:
 
 ```powershell
-uv run cs2asset import SOURCE --type material
-uv run cs2asset import SOURCE --type model
-uv run cs2asset import SOURCE --type sky
+uvx --python 3.12 cs2asset import SOURCE --type material
+uvx --python 3.12 cs2asset import SOURCE --type model
+uvx --python 3.12 cs2asset import SOURCE --type sky
 ```
 
 ## Materials
@@ -176,7 +178,7 @@ rock/
 Import it with:
 
 ```powershell
-uv run cs2asset import .\rock\
+uvx --python 3.12 cs2asset import .\rock\
 ```
 
 Supported texture names include:
@@ -199,7 +201,7 @@ Generic names such as `normal` and `nrm` are treated as OpenGL normal maps by de
 You can override the format:
 
 ```powershell
-uv run cs2asset import .\rock\ --normal-format dx
+uvx --python 3.12 cs2asset import .\rock\ --normal-format dx
 ```
 
 Materials use CS2's `csgo_complex.vfx` shader.
@@ -223,7 +225,7 @@ Supported formats:
 Example:
 
 ```powershell
-uv run cs2asset import .\assets\mossy_rock.glb
+uvx --python 3.12 cs2asset import .\assets\mossy_rock.glb
 ```
 
 `cs2asset` uses Blender to inspect and convert the source before generating the Source 2 model resources required by Hammer.
@@ -233,13 +235,13 @@ Static meshes, UVs, materials, supplied LODs, and basic collision are supported.
 By default, a simple convex collision hull is generated. Collision can be disabled:
 
 ```powershell
-uv run cs2asset import .\assets\rock.glb --collision none
+uvx --python 3.12 cs2asset import .\assets\rock.glb --collision none
 ```
 
 A different scale can also be supplied:
 
 ```powershell
-uv run cs2asset import .\assets\rock.glb --scale 1.0
+uvx --python 3.12 cs2asset import .\assets\rock.glb --scale 1.0
 ```
 
 Rigged models are currently imported as static snapshots of their evaluated pose.
@@ -249,13 +251,13 @@ Rigged models are currently imported as static snapshots of their evaluated pose
 HDR and EXR panoramas can be imported directly:
 
 ```powershell
-uv run cs2asset import .\assets\sunset.hdr
+uvx --python 3.12 cs2asset import .\assets\sunset.hdr
 ```
 
 You can adjust yaw and exposure during import:
 
 ```powershell
-uv run cs2asset import .\assets\sunset.hdr --yaw 90 --exposure -1
+uvx --python 3.12 cs2asset import .\assets\sunset.hdr --yaw 90 --exposure -1
 ```
 
 The generated sky material can be assigned to `env_sky` in Hammer.
@@ -267,25 +269,25 @@ The panorama provides the visual sky and environment data. Map-specific lighting
 List discovered addons:
 
 ```powershell
-uv run cs2asset projects list
+uvx --python 3.12 cs2asset projects list
 ```
 
 Select one:
 
 ```powershell
-uv run cs2asset projects use de_example
+uvx --python 3.12 cs2asset projects use de_example
 ```
 
 You can also specify the project for an individual import:
 
 ```powershell
-uv run cs2asset import .\assets\rock.glb --project de_example
+uvx --python 3.12 cs2asset import .\assets\rock.glb --project de_example
 ```
 
 For scripts or other non-interactive environments:
 
 ```powershell
-uv run cs2asset init --project de_example
+uvx --python 3.12 cs2asset init --project de_example
 ```
 
 Non-interactive commands do not stop to ask for project selection.
@@ -294,41 +296,41 @@ Non-interactive commands do not stop to ask for project selection.
 
 ```powershell
 # Check the local setup
-uv run cs2asset doctor
+uvx --python 3.12 cs2asset doctor
 
 # Select an addon
-uv run cs2asset init
+uvx --python 3.12 cs2asset init
 
 # Import an asset
-uv run cs2asset import SOURCE
+uvx --python 3.12 cs2asset import SOURCE
 
 # Inspect an asset
-uv run cs2asset info SOURCE
+uvx --python 3.12 cs2asset info SOURCE
 
 # Search Poly Haven
-uv run cs2asset search "QUERY" --provider polyhaven
+uvx --python 3.12 cs2asset search "QUERY" --provider polyhaven
 
 # List installed imports
-uv run cs2asset list
+uvx --python 3.12 cs2asset list
 
 # Rebuild an existing import
-uv run cs2asset rebuild IMPORT_ID
+uvx --python 3.12 cs2asset rebuild IMPORT_ID
 
 # Show configuration
-uv run cs2asset config show
+uvx --python 3.12 cs2asset config show
 
 # Show help
-uv run cs2asset --help
+uvx --python 3.12 cs2asset --help
 ```
 
 Some useful import options:
 
 ```powershell
-uv run cs2asset import concrete_floor_01 --resolution 1k
-uv run cs2asset import concrete_floor_01 --tiling 2
-uv run cs2asset import concrete_floor_01 --surface concrete
-uv run cs2asset import dirty_football --collision none
-uv run cs2asset import sunset_jhbcentral --yaw 90 --exposure -1
+uvx --python 3.12 cs2asset import concrete_floor_01 --resolution 1k
+uvx --python 3.12 cs2asset import concrete_floor_01 --tiling 2
+uvx --python 3.12 cs2asset import concrete_floor_01 --surface concrete
+uvx --python 3.12 cs2asset import dirty_football --collision none
+uvx --python 3.12 cs2asset import sunset_jhbcentral --yaw 90 --exposure -1
 ```
 
 ## Dry runs
@@ -336,7 +338,7 @@ uv run cs2asset import sunset_jhbcentral --yaw 90 --exposure -1
 Resolve an import without converting, compiling, or installing anything:
 
 ```powershell
-uv run cs2asset import concrete_floor_01 --dry-run
+uvx --python 3.12 cs2asset import concrete_floor_01 --dry-run
 ```
 
 This is useful for checking the selected source, detected asset type, options, project, and expected output paths.
@@ -346,7 +348,7 @@ This is useful for checking the selected source, detected asset type, options, p
 Previously imported assets can be rebuilt while keeping their existing Hammer resource paths:
 
 ```powershell
-uv run cs2asset rebuild IMPORT_ID
+uvx --python 3.12 cs2asset rebuild IMPORT_ID
 ```
 
 Local imports normally reread the original source files.
@@ -354,13 +356,13 @@ Local imports normally reread the original source files.
 To rebuild from the retained input snapshot instead:
 
 ```powershell
-uv run cs2asset rebuild IMPORT_ID --cached-inputs
+uvx --python 3.12 cs2asset rebuild IMPORT_ID --cached-inputs
 ```
 
 Cached provider assets can be rebuilt offline:
 
 ```powershell
-uv run cs2asset rebuild IMPORT_ID --offline
+uvx --python 3.12 cs2asset rebuild IMPORT_ID --offline
 ```
 
 Use `cs2asset list` to find import IDs.
@@ -374,7 +376,7 @@ Use `cs2asset list` to find import IDs.
 Local materials:
 
 ```powershell
-uv run cs2asset blend create `
+uvx --python 3.12 cs2asset blend create `
     .\materials\forest_ground `
     .\materials\rock `
     --name forest_rock
@@ -383,7 +385,7 @@ uv run cs2asset blend create `
 Poly Haven materials:
 
 ```powershell
-uv run cs2asset blend create `
+uvx --python 3.12 cs2asset blend create `
     polyhaven:forest_ground_04 `
     polyhaven:rock_face_03 `
     --name forest_rock
@@ -392,7 +394,7 @@ uv run cs2asset blend create `
 Local and online sources can also be mixed:
 
 ```powershell
-uv run cs2asset blend create `
+uvx --python 3.12 cs2asset blend create `
     .\materials\rock `
     polyhaven:forest_ground_04 `
     --name mixed_ground
@@ -407,19 +409,19 @@ The current implementation supports two layers. Extra layers, custom transition 
 Show the current configuration:
 
 ```powershell
-uv run cs2asset config show
+uvx --python 3.12 cs2asset config show
 ```
 
 Set a user default:
 
 ```powershell
-uv run cs2asset config set resolution 1k
+uvx --python 3.12 cs2asset config set resolution 1k
 ```
 
 Set a project-specific value:
 
 ```powershell
-uv run cs2asset config set surface concrete --project de_example
+uvx --python 3.12 cs2asset config set surface concrete --project de_example
 ```
 
 Configuration precedence is:
@@ -446,13 +448,13 @@ CS2ASSET_BLENDER
 Custom tool locations can also be provided directly:
 
 ```powershell
-uv run cs2asset `
+uvx --python 3.12 cs2asset `
     --cs2-root 'D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive' `
     doctor
 ```
 
 ```powershell
-uv run cs2asset import dirty_football `
+uvx --python 3.12 cs2asset import dirty_football `
     --blender 'C:\Program Files\Blender Foundation\Blender 5.1\blender.exe'
 ```
 
@@ -513,6 +515,13 @@ Where possible, unsupported inputs result in an explicit conversion error rather
 
 ## Development
 
+Clone the repository and install its development dependencies:
+
+```powershell
+uv sync --locked
+uv run cs2asset --help
+```
+
 Run the test suite:
 
 ```powershell
@@ -535,10 +544,10 @@ uv build
 
 ## Installation
 
-Install the current checkout with `uv`:
+Install from PyPI with `uv`:
 
 ```powershell
-uv tool install .
+uv tool install --python 3.12 cs2asset
 ```
 
 Then use `cs2asset` directly:
@@ -557,7 +566,39 @@ To run directly from the repository without installing:
 uvx --python 3.12 --isolated --from . cs2asset --version
 ```
 
-The package is not currently published to PyPI.
+To run the published package without installing a persistent command:
+
+```powershell
+uvx --python 3.12 cs2asset doctor
+```
+
+To upgrade a persistent installation, run `uv tool upgrade cs2asset`.
+
+## Releases
+
+The `.github/workflows/publish.yml` workflow tests, builds, and publishes to PyPI
+when a `v*` tag is pushed. The tag must match both versions in `pyproject.toml`
+and `src/cs2asset/__init__.py`.
+
+Before the first release, configure a pending Trusted Publisher in your PyPI
+account with these values:
+
+- Project name: `cs2asset`
+- GitHub owner: `gronnmann`
+- Repository: `cs2asset`
+- Workflow filename: `publish.yml`
+- Environment: `pypi`
+
+For each release, update both package versions, run `uv lock`, commit the changes,
+and push the branch and matching tag:
+
+```powershell
+git push origin master
+git tag -a v0.2.1 -m "Release 0.2.1"
+git push origin v0.2.1
+```
+
+Use the new version number for subsequent releases. PyPI versions cannot be reused.
 
 ## License
 

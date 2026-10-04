@@ -9,6 +9,11 @@ dependencies = ["typer>=0.16,<1", "rich>=14,<15", "httpx>=0.28,<1", "numpy>=2,<3
 [project.scripts]
 cs2asset = "cs2asset.cli:app"
 
+[project.urls]
+Homepage = "https://github.com/gronnmann/cs2asset"
+Repository = "https://github.com/gronnmann/cs2asset"
+Issues = "https://github.com/gronnmann/cs2asset/issues"
+
 [build-system]
 requires = ["uv_build>=0.9,<0.10"]
 build-backend = "uv_build"
