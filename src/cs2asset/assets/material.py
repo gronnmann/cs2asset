@@ -45,20 +45,30 @@ def match_map(name: str):
 
 def discover_maps(names: list[str]):
     maps, groups, convention, warnings = {}, set(), None, []
+    normals = []
     for name in sorted(names, key=str.casefold):
         match = match_map(name)
         if not match:
             continue
         role, group, normal = match
         groups.add(group)
+        if role == "normal":
+            normals.append((name, group, normal))
+            continue
         if role in maps:
             raise CS2AssetError(
                 f"Ambiguous {role} maps: {maps[role]}, {name}. "
                 "Keep one texture set and one map per semantic in the folder."
             )
         maps[role] = name
-        if role == "normal":
-            convention = normal
+    if normals:
+        conventions = [item[2] for item in normals]
+        if len(normals) > 1 and (len(normals) != 2 or set(conventions) != {"opengl", "directx"}):
+            raise CS2AssetError("Ambiguous normal maps: " + ", ".join(n[0] for n in normals))
+        selected = next((n for n in normals if n[2] == "opengl"), normals[0])
+        maps["normal"], _, convention = selected
+        if len(normals) == 2:
+            warnings.append(f"Both DX and GL normals found; selected {selected[0]} (OpenGL).")
     if len(groups) > 1:
         raise CS2AssetError(
             "Multiple texture sets found: "
@@ -74,4 +84,12 @@ def discover_maps(names: list[str]):
         warnings.append(
             "Normal convention is unspecified; assuming OpenGL. Use --normal-format dx if needed."
         )
-    return maps, {"normal_convention": convention or "opengl"}, tuple(warnings)
+    return (
+        maps,
+        {
+            "normal_convention": convention or "opengl",
+            "normal_convention_explicit": convention is not None,
+            "normal_map": maps.get("normal"),
+        },
+        tuple(warnings),
+    )

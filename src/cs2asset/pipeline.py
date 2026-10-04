@@ -24,7 +24,7 @@ from .materials import TEMPLATE_VERSION, create_material, create_sky
 from .models import MODEL_CONVERTER_VERSION, export_model, inspect_model, write_modeldoc
 from .resource_names import model_material_names, resource_name
 from .sources import canonical_source, record_source, source_provider
-from .sources.base import input_path
+from .sources.base import input_path, material_normal_format
 from .sources.local import SnapshotProvider
 from .sources.polyhaven import adapt_resolved
 
@@ -176,7 +176,7 @@ def convert_asset(
             content,
             resource_dir,
             maps,
-            normal_format=options.normal_format or payload.normal_format,
+            normal_format=material_normal_format(normalized, options.normal_format),
             constants=payload.constants,
             surface=options.surface,
             tiling=options.tiling,
@@ -291,6 +291,7 @@ def convert_asset(
         "input_sha256": normalized.input_sha256,
         "snapshot": normalized.snapshot,
         "alias_candidates": aliases,
+        "source_choices": resolved.choices,
     }
 
 
@@ -569,6 +570,7 @@ def import_asset(
             "snapshot": converted.get("snapshot", {}),
             "tools": tools,
             "input_sha256": converted.get("input_sha256", {}),
+            "choices": converted.get("source_choices", resolved.choices),
             "resources": converted["resources"],
             "warnings": [
                 *converted["warnings"],

@@ -638,3 +638,29 @@ overlapping UVs must represent compatible surface values, and UV islands must fi
 the texture tile. A mixed surface with one connected Principled shader can bake that PBR component;
 additional translucent/additive lobes are omitted and reported. Surfaces without a
 unique connected Principled shader remain unsupported.
+
+
+### ambientCG materials
+
+Import ambientCG PBR materials directly using API v3:
+
+```powershell
+uvx cs2asset search grass --provider ambientcg
+uvx cs2asset info ambientcg:Grass005
+uvx cs2asset import ambientcg:Grass005 --resolution 2k
+uvx cs2asset import https://ambientcg.com/a/Grass005 --resolution 2k
+```
+
+The default resolution is 2k. The importer prefers PNG packages and falls back to
+JPG at the requested resolution; unavailable resolutions report the available
+packages. Downloads and metadata use the existing cache, including `--offline`
+after an online import. Bare asset IDs still refer to Poly Haven. ambientCG
+support currently covers materials; other asset types produce a clear error.
+
+Local folders and ZIP packages can contain both DirectX and OpenGL normal maps
+for the same material. The importer selects OpenGL when both exist and detects
+DirectX when it is the only variant. Duplicate maps of one convention and mixed
+texture sets still produce an ambiguity error. Explicit `NormalGL`/`NormalDX`
+filenames determine conversion; `--normal-format dx` is a hint for generic
+normal filenames with no declared convention. Selected normals are reported in
+choices and warnings, and DirectX inputs are converted to OpenGL once.

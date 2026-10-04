@@ -86,6 +86,9 @@ class ResolvedAsset:
 
 
 class PolyHavenProvider:
+    api_url = "https://api.polyhaven.com"
+    provider_label = "Poly Haven"
+
     def __init__(
         self,
         cache_dir: Path,
@@ -124,7 +127,7 @@ class PolyHavenProvider:
         if self.offline:
             if cached is None:
                 raise CS2AssetError(
-                    f"No cached Poly Haven metadata for {endpoint}; run online first."
+                    f"No cached {self.provider_label} metadata for {endpoint}; run online first."
                 )
             return cached
         if cached is not None and not refresh:
@@ -134,14 +137,14 @@ class PolyHavenProvider:
             response = None
             try:
                 response = self.client.get(
-                    "https://api.polyhaven.com" + endpoint,
+                    self.api_url + endpoint,
                     params=params,
                     headers={"User-Agent": USER_AGENT},
                 )
                 response.raise_for_status()
                 value = response.json()
                 if not isinstance(value, dict):
-                    raise TypeError("Expected a JSON object from the Poly Haven API")
+                    raise TypeError(f"Expected a JSON object from the {self.provider_label} API")
                 self.cache.put(key, value)
                 return value
             except (httpx.HTTPError, ValueError, TypeError) as exc:
@@ -155,9 +158,9 @@ class PolyHavenProvider:
                     time.sleep(retry_delay(response, attempt))
         stale = self.cache.get(key, stale=True)
         if stale is not None:
-            self.last_warning = "Poly Haven API unavailable; using cached metadata."
+            self.last_warning = f"{self.provider_label} API unavailable; using cached metadata."
             return stale
-        raise CS2AssetError(f"Poly Haven request failed ({endpoint}): {error}")
+        raise CS2AssetError(f"{self.provider_label} request failed ({endpoint}): {error}")
 
     @staticmethod
     def _asset(asset_id: str, data: dict[str, Any]) -> Asset:

@@ -2,11 +2,14 @@
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from cs2asset.cache import DownloadCache
 from cs2asset.errors import CS2AssetError
 from cs2asset.provider import PolyHavenProvider, parse_asset_id
 
+from .ambientcg import AmbientCGProvider, AmbientCGSource
+from .ambientcg import parse_asset_id as parse_ambientcg_id
 from .local import LocalDirectoryProvider, LocalFileProvider, canonical_path
 from .polyhaven import PolyHavenSource
 
@@ -22,6 +25,11 @@ def is_local(value: str) -> bool:
 def canonical_source(value: str) -> str:
     if is_local(value):
         return str(canonical_path(value))
+    if value.startswith("ambientcg:") or urlsplit(value).hostname in {
+        "ambientcg.com",
+        "www.ambientcg.com",
+    }:
+        return f"ambientcg:{parse_ambientcg_id(value)}"
     if ":" in value and value.split(":", 1)[0] not in {"polyhaven", "https", "http"}:
         return value
     return f"polyhaven:{parse_asset_id(value)}"
@@ -41,12 +49,15 @@ class SourceRegistry:
         self.legacy_provider = legacy_provider
         self.downloader, self.progress = downloader, progress
         self._owned_provider = None
-        self._factories = {"polyhaven": self._polyhaven_source}
+        self._ambientcg_provider = None
+        self._factories = {"polyhaven": self._polyhaven_source, "ambientcg": self._ambientcg_source}
 
     def register(self, scheme, factory):
         """Add a provider factory without changing the CLI pipeline or converters."""
         if not re.fullmatch(r"[a-z][a-z0-9+.-]*", scheme) or len(scheme) == 1:
-            raise CS2AssetError("Provider schemes must be lowercase names, not Windows drive letters")
+            raise CS2AssetError(
+                "Provider schemes must be lowercase names, not Windows drive letters"
+            )
         self._factories[scheme] = factory
 
     def provider_for(self, value):
@@ -55,8 +66,7 @@ class SourceRegistry:
             return cls()
         scheme = value.split(":", 1)[0] if ":" in value else "polyhaven"
         if scheme in {"https", "http"}:
-            parse_asset_id(value)
-            scheme = "polyhaven"
+            scheme = canonical_source(value).split(":", 1)[0]
         factory = self._factories.get(scheme)
         if factory is None:
             raise CS2AssetError(f"Unsupported source provider: {scheme}")
@@ -72,7 +82,16 @@ class SourceRegistry:
             provider, self.cache, downloader=self.downloader, progress=self.progress
         )
 
+    def _ambientcg_source(self):
+        if self._ambientcg_provider is None:
+            self._ambientcg_provider = AmbientCGProvider(self.cache, offline=self.offline)
+        return AmbientCGSource(
+            self._ambientcg_provider, self.cache, downloader=self.downloader, progress=self.progress
+        )
+
     def close(self):
+        if self._ambientcg_provider:
+            self._ambientcg_provider.close()
         if self._owned_provider:
             self._owned_provider.close()
 

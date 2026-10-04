@@ -60,3 +60,10 @@ def normalized(resolved, paths, hashes, *, snapshot=None, remap=None):
     else:
         payload = SkyInput(paths["hdri"])
     return NormalizedAsset(resolved, payload, hashes, snapshot or {})
+
+
+def material_normal_format(asset, override=None):
+    """An explicit filename/provider convention takes precedence over a generic-map hint."""
+    if asset.resolved.choices.get("normal_convention_explicit"):
+        return asset.input.normal_format
+    return override or asset.input.normal_format

@@ -1,0 +1,71 @@
+{
+    "totalResults": 1,
+    "nextPageHttp": null,
+    "currentPageHttp": "https://ambientcg.com/api/v3/assets?id=grass005&sort=popular&limit=100&include=downloads%2Ctitle%2Ctype%2Curl%2Cmaps",
+    "previousPageHttp": null,
+    "assets": [
+        {
+            "id": "Grass005",
+            "downloads": [
+                {
+                    "attributes": "1K-JPG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_1K-JPG.zip",
+                    "size": 10442657
+                },
+                {
+                    "attributes": "2K-JPG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_2K-JPG.zip",
+                    "size": 39523019
+                },
+                {
+                    "attributes": "4K-JPG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_4K-JPG.zip",
+                    "size": 157029833
+                },
+                {
+                    "attributes": "8K-JPG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_8K-JPG.zip",
+                    "size": 650370891
+                },
+                {
+                    "attributes": "1K-PNG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_1K-PNG.zip",
+                    "size": 19315715
+                },
+                {
+                    "attributes": "2K-PNG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_2K-PNG.zip",
+                    "size": 73828852
+                },
+                {
+                    "attributes": "4K-PNG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_4K-PNG.zip",
+                    "size": 289746975
+                },
+                {
+                    "attributes": "8K-PNG",
+                    "extension": "zip",
+                    "url": "https://ambientcg.com/get?file=Grass005_8K-PNG.zip",
+                    "size": 1113527418
+                }
+            ],
+            "title": "Grass 005",
+            "type": "material",
+            "url": "https://ambientcg.com/a/Grass005",
+            "maps": [
+                "color",
+                "displacement",
+                "normal",
+                "roughness",
+                "ambient-occlusion"
+            ]
+        }
+    ]
+}

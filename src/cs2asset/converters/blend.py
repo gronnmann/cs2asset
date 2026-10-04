@@ -13,6 +13,7 @@ from cs2asset.errors import CS2AssetError
 from cs2asset.images import normalize_map, read_image, write_image
 from cs2asset.materials import MATERIAL_PARAMETERS, prepare_material_maps, write_vmat
 from cs2asset.resource_names import resource_name
+from cs2asset.sources.base import material_normal_format
 
 BLEND_CONTRACT_VERSION = "csgo_environment_blend-25687242-v1"
 BLEND_WARNING = (
@@ -43,7 +44,7 @@ def create_blend(
         prepared, notes = prepare_material_maps(
             destination,
             source_maps,
-            normal_format=normal_format or layer.input.normal_format,
+            normal_format=material_normal_format(layer, normal_format),
             constants=layer.input.constants,
         )
         if "opacity" in prepared and np.any(read_image(prepared["opacity"]) < 0.999):

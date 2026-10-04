@@ -238,7 +238,7 @@ def doctor(ctx: typer.Context, project: str | None = None, json: bool = False):
         "project": selected.as_dict() if selected else None,
         "write_access": check_write_access(selected) if selected else None,
         "capabilities": {"textures": True, "hdris": True, "models": blender is not None},
-        "sources": {"local": True, "polyhaven": True},
+        "sources": {"local": True, "polyhaven": True, "ambientcg": True},
         "blend_support": blend_capability(installed),
         "project_count": len(discover_projects(installed)),
     }
@@ -251,7 +251,7 @@ def doctor(ctx: typer.Context, project: str | None = None, json: bool = False):
 @guarded
 def search(
     ctx: typer.Context,
-    query: Annotated[str, typer.Argument(help="Words to find in Poly Haven assets.")] = "",
+    query: Annotated[str, typer.Argument(help="Words to find in provider assets.")] = "",
     type: str | None = None,
     limit: int = 20,
     refresh: bool = False,
@@ -259,17 +259,20 @@ def search(
     offline: bool = False,
     provider_name: Annotated[str, typer.Option("--provider")] = "polyhaven",
 ):
-    """Search Poly Haven assets by words and asset type."""
-    if provider_name != "polyhaven":
+    """Search provider assets by words and asset type."""
+    from .sources.ambientcg import AmbientCGProvider
+
+    providers = {"polyhaven": PolyHavenProvider, "ambientcg": AmbientCGProvider}
+    if provider_name not in providers:
         raise CS2AssetError(
-            f"Provider {provider_name!r} does not support search. Use --provider polyhaven."
+            f"Provider {provider_name!r} does not support search. Use --provider polyhaven or ambientcg."
         )
-    with PolyHavenProvider(cache_dir(), offline=offline) as provider:
+    with providers[provider_name](cache_dir(), offline=offline) as provider:
         assets = provider.search(query, type, limit=limit, refresh=refresh)
         if json or ctx.obj["json"]:
             emit(ctx, [asdict(a) for a in assets], json=True)
             return
-        table = Table(title="Poly Haven assets")
+        table = Table(title=f"{provider.provider_label} assets")
         for heading in ("Asset ID", "Name", "Type"):
             table.add_column(heading)
         for asset in assets:
