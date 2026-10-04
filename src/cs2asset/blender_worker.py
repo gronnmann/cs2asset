@@ -12,7 +12,7 @@ from pathlib import Path
 
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+from mathutils import Euler, Matrix, Vector
 
 
 def image_path(image, output: Path, index: int) -> str:
@@ -71,35 +71,254 @@ def source_image(socket, *, normal=False):
     )
 
 
+UV_NAMES = set()
+
+
 def validate_uv(socket):
-    """Accept only coordinates represented by the exported mesh's active UVs."""
+    """Return the affine UV mapping represented by a coordinate chain."""
     if not socket.is_linked:
-        return
+        return Matrix.Identity(4)
     link = socket.links[0]
     node = link.from_node
     if node.type == "REROUTE":
-        validate_uv(node.inputs[0])
-        return
+        return validate_uv(node.inputs[0])
     if node.type == "TEX_COORD" and link.from_socket.name == "UV":
-        return
-    if node.type == "UVMAP" and not node.uv_map:
-        return
+        return Matrix.Identity(4)
+    if node.type == "UVMAP":
+        if node.uv_map:
+            UV_NAMES.add(node.uv_map)
+        return Matrix.Identity(4)
+    if (
+        node.type == "ATTRIBUTE"
+        and node.attribute_type == "GEOMETRY"
+        and link.from_socket.name == "Vector"
+    ):
+        UV_NAMES.add(node.attribute_name)
+        return Matrix.Identity(4)
     if node.type == "MAPPING":
-        for name, expected in (
-            ("Location", (0, 0, 0)),
-            ("Rotation", (0, 0, 0)),
-            ("Scale", (1, 1, 1)),
-        ):
-            value = node.inputs[name]
-            if value.is_linked or any(
-                abs(a - b) > 1e-6 for a, b in zip(value.default_value, expected, strict=True)
-            ):
-                raise RuntimeError("Non-identity texture Mapping requires baking before import")
-        validate_uv(node.inputs["Vector"])
+        if any(node.inputs[n].is_linked for n in ("Location", "Rotation", "Scale")):
+            raise RuntimeError("Linked Mapping parameters require --bake-materials")
+        location = Vector(node.inputs["Location"].default_value)
+        rotation = Euler(node.inputs["Rotation"].default_value).to_matrix().to_4x4()
+        scale = Matrix.Diagonal((*node.inputs["Scale"].default_value, 1))
+        if node.vector_type == "POINT":
+            transform = Matrix.Translation(location) @ rotation @ scale
+        elif node.vector_type == "TEXTURE":
+            try:
+                transform = (Matrix.Translation(location) @ rotation @ scale).inverted()
+            except ValueError as exc:
+                raise RuntimeError("Singular Mapping requires --bake-materials") from exc
+        elif node.vector_type == "VECTOR":
+            transform = rotation @ scale
+        else:
+            raise RuntimeError("Normal coordinate Mapping requires --bake-materials")
+        return transform @ validate_uv(node.inputs["Vector"])
+    raise RuntimeError(f"Texture coordinates from {node.name!r} require --bake-materials")
+
+
+def material_mapping(material):
+    transforms = []
+    if not material.use_nodes:
+        return Matrix.Identity(4)
+    # Inspect only nodes feeding supported Principled inputs.
+    outputs = [
+        n for n in material.node_tree.nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output
+    ]
+    if not outputs or not outputs[0].inputs["Surface"].is_linked:
+        return Matrix.Identity(4)
+    shader = outputs[0].inputs["Surface"].links[0].from_node
+    visited = set()
+
+    def visit(node):
+        if node.as_pointer() in visited:
+            return
+        visited.add(node.as_pointer())
+        if node.type == "TEX_IMAGE":
+            transforms.append(validate_uv(node.inputs["Vector"]))
+        else:
+            for socket in node.inputs:
+                for link in socket.links:
+                    visit(link.from_node)
+
+    for name in ("Base Color", "Roughness", "Metallic", "Alpha", "Normal"):
+        socket = shader.inputs.get(name)
+        if socket:
+            for link in socket.links:
+                visit(link.from_node)
+    transform = transforms[0] if transforms else Matrix.Identity(4)
+    if any(
+        any(abs(t[r][c] - transform[r][c]) > 1e-6 for r in range(4) for c in range(4))
+        for t in transforms
+    ):
+        raise RuntimeError(
+            f"Material {material.name!r} uses conflicting texture mappings; use --bake-materials"
+        )
+    # Changing the tangent basis would change a normal map's interpretation.
+    normal = shader.inputs.get("Normal")
+    if (
+        normal
+        and normal.is_linked
+        and (
+            abs(transform[0][1]) > 1e-6
+            or abs(transform[1][0]) > 1e-6
+            or transform[0][0] <= 0
+            or transform[1][1] <= 0
+        )
+    ):
+        raise RuntimeError("Rotated/reflected UVs with normal maps require --bake-materials")
+    return transform
+
+
+def bake_material(material, objects, output, index, resolution):
+    """Bake supported Principled channels onto the original active UV layout."""
+    if not material.use_nodes:
         return
-    raise RuntimeError(
-        f"Texture coordinates from {node.name!r} require baking to the active UV map"
-    )
+    nodes, links = material.node_tree.nodes, material.node_tree.links
+    outputs = [n for n in nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output]
+    if not outputs or not outputs[0].inputs["Surface"].is_linked:
+        raise RuntimeError(f"Material {material.name!r} has no surface shader")
+    surface = outputs[0].inputs["Surface"]
+    shader = surface.links[0].from_node
+    if shader.type != "BSDF_PRINCIPLED":
+        found, visited = set(), set()
+
+        def visit(node):
+            if node.as_pointer() in visited:
+                return
+            visited.add(node.as_pointer())
+            if node.type == "BSDF_PRINCIPLED":
+                found.add(node)
+            for socket in node.inputs:
+                if socket.type == "SHADER":
+                    for link in socket.links:
+                        visit(link.from_node)
+
+        visit(shader)
+        if len(found) != 1:
+            raise RuntimeError("Baking requires exactly one connected Principled BSDF")
+        shader = next(iter(found))
+        # Export the PBR component; Source's cutout material cannot reproduce
+        # Blender's translucent/additive shader lobes.
+        links.new(shader.outputs[0], surface)
+        print(
+            f"Material {material.name}: baking Principled component; additional shader lobes omitted"
+        )
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = 1
+    scene.render.bake.margin = 8
+    baked = []
+    for semantic, name in (
+        ("base_color", "Base Color"),
+        ("roughness", "Roughness"),
+        ("metalness", "Metallic"),
+        ("opacity", "Alpha"),
+        ("normal", "Normal"),
+    ):
+        socket = shader.inputs[name]
+        if not socket.is_linked:
+            continue
+        image = bpy.data.images.new(f"bake_{index}_{semantic}", width=resolution, height=resolution)
+        image.colorspace_settings.name = "sRGB" if semantic == "base_color" else "Non-Color"
+        target = nodes.new("ShaderNodeTexImage")
+        target.image = image
+        nodes.active = target
+        emission = None
+        if semantic != "normal":
+            emission = nodes.new("ShaderNodeEmission")
+            links.new(socket.links[0].from_socket, emission.inputs["Color"])
+            links.new(emission.outputs[0], surface)
+        # Blender bakes every material slot of a selected object. Give the other
+        # materials disposable targets so it never writes into source images.
+        temporary_targets = []
+        other_materials = {
+            m for obj in objects for m in obj.data.materials if m and m != material and m.use_nodes
+        }
+        for other in other_materials:
+            old_active = other.node_tree.nodes.active
+            sink = bpy.data.images.new("cs2asset_bake_sink", width=resolution, height=resolution)
+            sink_node = other.node_tree.nodes.new("ShaderNodeTexImage")
+            sink_node.image = sink
+            other.node_tree.nodes.active = sink_node
+            temporary_targets.append((other, sink_node, sink, old_active))
+        visibility = {o: o.hide_render for o in objects}
+        first = True
+        try:
+            for obj in objects:
+                if material not in list(obj.data.materials):
+                    continue
+                if not obj.data.uv_layers:
+                    raise RuntimeError(f"Mesh {obj.name!r} has no UVs for baking")
+                for other in objects:
+                    other.hide_render = other != obj
+                bpy.ops.object.select_all(action="DESELECT")
+                obj.select_set(True)
+                bpy.context.view_layer.objects.active = obj
+                bpy.ops.object.bake(
+                    type="NORMAL" if semantic == "normal" else "EMIT",
+                    use_clear=first,
+                    use_selected_to_active=False,
+                )
+                first = False
+        finally:
+            for obj, hidden in visibility.items():
+                obj.hide_render = hidden
+            for other, sink_node, sink, old_active in temporary_targets:
+                other.node_tree.nodes.remove(sink_node)
+                other.node_tree.nodes.active = old_active
+                bpy.data.images.remove(sink)
+            if emission:
+                links.new(shader.outputs[0], surface)
+                nodes.remove(emission)
+        path = output / "baked" / f"m{index:03d}_{semantic}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.filepath_raw, image.file_format = str(path.resolve()), "PNG"
+        image.save()
+        baked.append((socket, target, semantic))
+    for socket, target, semantic in baked:
+        if semantic == "normal":
+            normal = nodes.new("ShaderNodeNormalMap")
+            links.new(target.outputs["Color"], normal.inputs["Color"])
+            links.new(normal.outputs[0], socket)
+        else:
+            links.new(target.outputs["Color"], socket)
+
+
+def list_scene():
+    scene = bpy.context.scene
+
+    def renderable(obj):
+        return (
+            obj.type in {"MESH", "CURVE", "SURFACE", "FONT", "META", "EMPTY"}
+            and not obj.hide_render
+        )
+
+    return {
+        "objects": [
+            {
+                "name": o.name,
+                "type": o.type,
+                "renderable": renderable(o),
+                "hidden": o.hide_render,
+                "materials": [s.material.name for s in o.material_slots if s.material],
+                "collections": [c.name for c in o.users_collection],
+                "lod": re.search(r"LOD[_ .-]?(\d+)", o.name, re.IGNORECASE)[1]
+                if re.search(r"LOD[_ .-]?(\d+)", o.name, re.IGNORECASE)
+                else None,
+            }
+            for o in scene.objects
+        ],
+        "collections": [
+            {
+                "name": c.name,
+                "objects": [o.name for o in c.all_objects],
+                "renderable": any(renderable(o) for o in c.all_objects),
+                "split_group": c in list(scene.collection.children),
+            }
+            for c in bpy.data.collections
+            if any(o.name in scene.objects for o in c.all_objects)
+        ],
+    }
 
 
 def alpha_path(image, output: Path, index: int) -> str:
@@ -283,6 +502,8 @@ def main(job: dict) -> dict:
     if job.get("operation") == "inspect":
         return inspect_dependencies(job)
     load_source(job)
+    if job.get("operation") == "list":
+        return list_scene()
     output = Path(job["output_dir"])
     scene = bpy.context.scene
     warnings = []
@@ -309,9 +530,36 @@ def main(job: dict) -> dict:
                 modifier.levels = modifier.render_levels
     bpy.context.view_layer.update()
     graph = bpy.context.evaluated_depsgraph_get()
+    selected = None
+    if job.get("object_name"):
+        obj = scene.objects.get(job["object_name"])
+        if obj is None:
+            raise RuntimeError(f"Unknown object: {job['object_name']}")
+        selected = {obj, *obj.children_recursive}
+        pattern = r"(?:^|[_ .-])LOD[_ .-]?(\d+)(?:$|[_. -])"
+        match = re.search(pattern, obj.name, re.IGNORECASE)
+        if match:
+            stem = re.sub(pattern, "_LOD_", obj.name, flags=re.IGNORECASE)
+            selected.update(
+                o
+                for o in scene.objects
+                if re.sub(pattern, "_LOD_", o.name, flags=re.IGNORECASE) == stem
+            )
+    if job.get("collection"):
+        collection = bpy.data.collections.get(job["collection"])
+        if collection is None:
+            raise RuntimeError(f"Unknown collection: {job['collection']}")
+        selected = set(collection.all_objects)
     meshes = []
+    source_matrices = []
     for instance in graph.object_instances:
         obj = instance.object
+        if (
+            selected is not None
+            and obj.original not in selected
+            and not (instance.parent and instance.parent.original in selected)
+        ):
+            continue
         if obj.type not in {"MESH", "CURVE", "SURFACE", "FONT", "META"} or obj.hide_render:
             continue
         if not instance.show_self:
@@ -337,6 +585,7 @@ def main(job: dict) -> dict:
                 if lod_match:
                     break
         meshes.append((obj.name, mesh, int(lod_match[1]) if lod_match else None))
+        source_matrices.append(instance.matrix_world.copy())
     if not meshes:
         raise RuntimeError("Source contains no visible render meshes")
     export_scene = bpy.data.scenes.new("cs2asset_export")
@@ -350,10 +599,103 @@ def main(job: dict) -> dict:
     if levels[0] != 0:
         raise RuntimeError("Source contains named LODs but no LOD0 mesh")
     export_objects = []
+    center = Vector((0, 0, 0))
+    if job.get("origin") == "center":
+        points = [v.co for _, mesh, level in meshes if level in {None, 0} for v in mesh.vertices]
+        center = Vector(
+            [(min(v[i] for v in points) + max(v[i] for v in points)) / 2 for i in range(3)]
+        )
+        for _, mesh, _ in meshes:
+            mesh.transform(Matrix.Translation(-center))
+            mesh.update()
+    # Create all objects before baking so shared materials include every mesh.
     for index, (name, mesh, level) in enumerate(meshes):
         obj = bpy.data.objects.new(f"mesh_{index:03d}_{name}", mesh)
         export_scene.collection.objects.link(obj)
         export_objects.append((obj, level))
+    all_materials = list(dict.fromkeys(m for _, mesh, _ in meshes for m in mesh.materials if m))
+    if job.get("bake_materials"):
+        # Restore source object coordinates for generated/object-coordinate graphs.
+        # Geometry is returned to the export coordinate system after baking.
+        for (obj, _), matrix in zip(export_objects, source_matrices):
+            mesh = obj.data
+            mesh.transform(
+                (Matrix.Scale(factor, 4) @ matrix).inverted() @ Matrix.Translation(center)
+            )
+            if matrix.determinant() < 0:
+                mesh.flip_normals()
+            obj.matrix_world = matrix
+        for _, mesh, _ in meshes:
+            if not mesh.uv_layers:
+                attribute = mesh.attributes.get("UVMap")
+                if (
+                    attribute
+                    and attribute.domain == "CORNER"
+                    and attribute.data_type == "FLOAT_VECTOR"
+                ):
+                    values = [d.vector.copy() for d in attribute.data]
+                    mesh.attributes.remove(attribute)
+                    layer = mesh.uv_layers.new(name="UVMap")
+                    for loop, value in zip(layer.data, values):
+                        loop.uv = value[:2]
+        for index, material in enumerate(all_materials):
+            bake_material(
+                material,
+                [o for o, _ in export_objects],
+                output,
+                index,
+                job.get("bake_resolution", 2048),
+            )
+        for (obj, _), matrix in zip(export_objects, source_matrices):
+            obj.data.transform(Matrix.Translation(-center) @ Matrix.Scale(factor, 4) @ matrix)
+            if matrix.determinant() < 0:
+                obj.data.flip_normals()
+            obj.matrix_world = Matrix.Identity(4)
+            obj.data.update()
+        bpy.context.view_layer.update()
+        warnings.append(
+            "Material Principled channels baked to active UVs; additional shader lobes are omitted. Overlapping UVs must have compatible surface values."
+        )
+    mappings, coordinate_names = {}, {}
+    for material in all_materials:
+        UV_NAMES.clear()
+        mappings[material] = material_mapping(material)
+        coordinate_names[material] = set(UV_NAMES)
+    for _, mesh, _ in meshes:
+        names = set().union(*(coordinate_names.get(m, set()) for m in mesh.materials))
+        if len(names) > 1:
+            raise RuntimeError("Multiple named UV channels on one mesh require --bake-materials")
+        if names:
+            name = next(iter(names))
+            layer = mesh.uv_layers.get(name)
+            if layer is None:
+                attribute = mesh.attributes.get(name)
+                if (
+                    attribute is None
+                    or attribute.domain != "CORNER"
+                    or attribute.data_type != "FLOAT_VECTOR"
+                ):
+                    raise RuntimeError(f"Mesh {mesh.name!r} has no UV attribute {name!r}")
+                values = [d.vector.copy() for d in attribute.data]
+                mesh.attributes.remove(attribute)
+                layer = mesh.uv_layers.new(name=name)
+                for loop, value in zip(layer.data, values):
+                    loop.uv = value[:2]
+            mesh.uv_layers.active = layer
+            layer.active_render = True
+    for _, mesh, _ in meshes:
+        if mesh.uv_layers:
+            uv = mesh.uv_layers.active.data
+            for polygon in mesh.polygons:
+                if polygon.material_index < len(mesh.materials):
+                    transform = mappings.get(
+                        mesh.materials[polygon.material_index], Matrix.Identity(4)
+                    )
+                    for loop in polygon.loop_indices:
+                        coord = transform @ Vector((*uv[loop].uv, 0, 1))
+                        uv[loop].uv = coord[:2]
+    for index, (name, mesh, level) in enumerate(meshes):
+        obj = export_objects[index][0]
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
         if not mesh.materials:

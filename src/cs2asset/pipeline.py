@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from filelock import FileLock
@@ -21,7 +21,7 @@ from .errors import CS2AssetError
 from .images import read_image, write_image
 from .installer import Installer, contained_path, file_hash
 from .materials import TEMPLATE_VERSION, create_material, create_sky
-from .models import MODEL_CONVERTER_VERSION, export_model, write_modeldoc
+from .models import MODEL_CONVERTER_VERSION, export_model, inspect_model, write_modeldoc
 from .resource_names import model_material_names, resource_name
 from .sources import canonical_source, record_source, source_provider
 from .sources.base import input_path
@@ -39,9 +39,26 @@ class ImportOptions:
     yaw: float = 0.0
     exposure: float = 0.0
     normal_format: str | None = None
+    object_name: str | None = None
+    collection: str | None = None
+    split: str | None = None
+    origin: str = "source"
+    bake_materials: bool = False
+    bake_resolution: int = 2048
 
     def validate(self):
         import re
+
+        if self.object_name and self.collection:
+            raise CS2AssetError("Choose --object or --collection")
+        if self.split not in {None, "objects", "collections"}:
+            raise CS2AssetError("Split must be objects or collections")
+        if self.split and (self.object_name or self.collection):
+            raise CS2AssetError("Split cannot be combined with object/collection selection")
+        if self.origin not in {"source", "center"}:
+            raise CS2AssetError("Origin must be source or center")
+        if not 16 <= self.bake_resolution <= 8192:
+            raise CS2AssetError("Bake resolution must be between 16 and 8192")
 
         for name in ("scale", "tiling", "yaw", "exposure"):
             if not math.isfinite(getattr(self, name)):
@@ -100,6 +117,58 @@ def convert_asset(
     warnings, detail, resources, aliases = list(resolved.warnings), {}, [], {}
     name = resource_name(resolved.asset.name)
     payload = normalized.input
+    if not isinstance(payload, ModelInput) and (
+        options.object_name
+        or options.collection
+        or options.split
+        or options.bake_materials
+        or options.origin != "source"
+    ):
+        raise CS2AssetError("Object selection, splitting, origins, and baking require a model")
+    if isinstance(payload, ModelInput) and options.split:
+        listing = inspect_model(payload.path, build / "listing", blender, payload.dependency_remap)
+        entries = listing[options.split]
+        if options.split == "objects":
+            entries = [
+                e
+                for e in entries
+                if e["renderable"] and not e["hidden"] and e.get("lod") in {None, "0"}
+            ]
+        else:
+            entries = [e for e in entries if e["renderable"] and e.get("split_group", True)]
+        if not entries:
+            raise CS2AssetError("No renderable split groups found")
+        parts = []
+        for index, entry in enumerate(entries):
+            slug = f"{index:03d}_{resource_name(entry['name'])}"
+            child = replace(
+                normalized,
+                resolved=replace(
+                    resolved,
+                    namespace=f"{namespace}/{slug}",
+                    asset=replace(resolved.asset, name=entry["name"], metadata={}),
+                ),
+            )
+            child_options = replace(
+                options,
+                split=None,
+                object_name=entry["name"] if options.split == "objects" else None,
+                collection=entry["name"] if options.split == "collections" else None,
+            )
+            parts.append(
+                convert_asset(child, content, build / slug, variant, child_options, blender)
+            )
+        return {
+            "resources": [r for part in parts for r in part["resources"]],
+            "warnings": [w for part in parts for w in part["warnings"]],
+            "detail": {
+                "models": [{"name": e["name"], **p["detail"]} for e, p in zip(entries, parts)]
+            },
+            "content_hashes": {p: file_hash(f) for p, f in _file_set(content).items()},
+            "input_sha256": normalized.input_sha256,
+            "snapshot": normalized.snapshot,
+            "alias_candidates": {},
+        }
     if isinstance(payload, MaterialInput):
         maps = material_maps(normalized, build)
         resource_dir = f"materials/cs2asset/{namespace}/{variant}"
@@ -135,6 +204,10 @@ def convert_asset(
             "material_resource_root": material_root,
             "asset_name": name,
         }
+        for key in ("object_name", "collection", "origin", "bake_materials", "bake_resolution"):
+            value = getattr(options, key)
+            if value != getattr(ImportOptions(), key):
+                kwargs[key] = value
         if payload.dependency_remap:
             kwargs["dependency_remap"] = payload.dependency_remap
         exported = export_model(payload.path, build / "model", blender, **kwargs)
@@ -192,7 +265,13 @@ def convert_asset(
             "lod_levels": sorted(exported.lods),
         }
         dimensions = resolved.asset.metadata.get("dimensions")
-        if dimensions and dimensions["unit"] == "mm" and len(dimensions["values"]) == 3:
+        if (
+            not options.object_name
+            and not options.collection
+            and dimensions
+            and dimensions["unit"] == "mm"
+            and len(dimensions["values"]) == 3
+        ):
             expected = [d / 25.4 * options.scale for d in dimensions["values"]]
             if any(
                 abs(a - e) > max(0.1, e * 0.15)

@@ -500,10 +500,10 @@ Current limitations include:
 - Physics-prop setup is not generated
 - Collision is limited to a simple convex hull
 - Automatic LOD generation is not implemented
-- Procedural Blender materials must be baked before importing
+- Procedural Principled material inputs require `--bake-materials`
 - Unsupported or non-standard material graphs may require manual preparation
-- Alternate UV channels are not currently supported
-- Non-identity texture mapping may require baking
+- Multiple UV channels on the same mesh require baking
+- Compatible affine UV mappings are applied to mesh UVs; conflicting mappings require baking
 - Material opacity uses alpha testing rather than blended transparency
 - Displacement/parallax is not currently generated
 - Environment blends are experimental
@@ -603,3 +603,38 @@ Use the new version number for subsequent releases. PyPI versions cannot be reus
 See [`LICENSE`](LICENSE) for the license of `cs2asset`.
 
 Assets imported through `cs2asset` retain their original licenses. Poly Haven assets are CC0.
+
+
+## Models with multiple objects and mapped materials
+
+One source file produces one model by default. Inspect the source before selecting
+or splitting it (inspection downloads dependencies but does not compile or install):
+
+```powershell
+cs2asset model-list https://polyhaven.com/a/fir_sapling_medium
+cs2asset import trees.blend --object TreeA
+cs2asset import trees.blend --collection TreeA
+cs2asset import trees.blend --split collections --origin center
+cs2asset import props.blend --split objects
+cs2asset import trees.blend --bake-materials --bake-resolution 2048
+```
+
+Selection uses exact names. Object selection includes its descendants and matching
+named LOD siblings. Object splitting starts with visible objects without an LOD
+suffix or with LOD0. Collection splitting uses top-level scene collections, keeping
+nested collections and LODs together. Hidden render objects are excluded. Each
+split group has its own model and material resources, recorded in one import so
+rebuilding repeats the same selection. Materials are currently generated separately
+for each split group. `--origin source` preserves source coordinates; `center`
+centers each model's LOD0 bounding box and applies that offset to all its LODs.
+
+Compatible constant Mapping nodes are applied directly to exported UV coordinates.
+Named UV maps and corner vector UV attributes are supported. Conflicting texture
+mappings, procedural coordinates, and rotation/reflection with tangent normal maps
+require explicit baking. `--bake-materials` bakes linked base color, roughness,
+metalness, opacity, and tangent normal inputs from a Principled BSDF onto the active
+UV layout. Resolution accepts 16–8192 pixels. Baking does not unwrap meshes:
+overlapping UVs must represent compatible surface values, and UV islands must fit
+the texture tile. A mixed surface with one connected Principled shader can bake that PBR component;
+additional translucent/additive lobes are omitted and reported. Surfaces without a
+unique connected Principled shader remain unsupported.

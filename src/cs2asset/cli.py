@@ -365,12 +365,24 @@ def import_command(
     force: bool = False,
     json: bool = False,
     offline: bool = False,
+    object_name: Annotated[str | None, typer.Option("--object")] = None,
+    collection: str | None = None,
+    split: str | None = None,
+    origin: str = "source",
+    bake_materials: bool = False,
+    bake_resolution: int = 2048,
     asset_type: Annotated[
         str | None, typer.Option("--type", help="Require material, model, or sky.")
     ] = None,
 ):
     """Resolve, convert, compile, and install a local or provider asset into Hammer."""
     explicit = {
+        "object_name": object_name,
+        "collection": collection,
+        "split": split,
+        "origin": origin,
+        "bake_materials": bake_materials,
+        "bake_resolution": bake_resolution,
         "resolution": resolution,
         "scale": scale,
         "collision": collision,
@@ -568,3 +580,43 @@ def config_set(ctx: typer.Context, key: str, value: str, project: str | None = N
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("model-list")
+@guarded
+def model_list(
+    ctx: typer.Context,
+    asset: str,
+    blender: Path | None = None,
+    resolution: str | None = None,
+    json: bool = False,
+):
+    """Download/inspect a model and list objects, collections, materials and LODs."""
+    import tempfile
+
+    from .models import inspect_model
+
+    executable = discover_blender(blender or ctx.obj.get("blender"))
+    if executable is None:
+        raise CS2AssetError("Blender is required for model inspection")
+    with SourceRegistry(cache_dir()) as provider, tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = provider.provider_for(asset)
+        resolved = source.resolve(asset, resolution, asset_type="model")
+        resolved = source.prepare(resolved, blender=executable)
+        normalized = source.materialize(resolved, root / "inputs")
+        result = inspect_model(
+            normalized.input.path, root / "listing", executable, normalized.input.dependency_remap
+        )
+        if json or ctx.obj["json"]:
+            console.print_json(data=result)
+        else:
+            for category in ("objects", "collections"):
+                table = Table(title=category.title())
+                table.add_column("Name")
+                table.add_column("Details")
+                for entry in result[category]:
+                    table.add_row(
+                        entry["name"], str({k: v for k, v in entry.items() if k != "name"})
+                    )
+                console.print(table)

@@ -14,7 +14,7 @@ MODELDOC_HEADER = (
     "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} "
     "format:modeldoc36:version{972dada4-b828-45a4-bb93-7795cf0585da} -->"
 )
-MODEL_CONVERTER_VERSION = 3
+MODEL_CONVERTER_VERSION = 4
 
 
 @dataclass
@@ -48,6 +48,11 @@ def export_model(
     dependency_remap: dict[str, str] | None = None,
     material_resource_root: str | None = None,
     asset_name: str | None = None,
+    object_name: str | None = None,
+    collection: str | None = None,
+    origin: str = "source",
+    bake_materials: bool = False,
+    bake_resolution: int = 2048,
 ) -> ModelExport:
     """Evaluate static geometry, export inch-sized Z-up FBX, and inspect materials.
 
@@ -77,6 +82,11 @@ def export_model(
                 "dependency_remap": dependency_remap or {},
                 "material_resource_root": material_resource_root,
                 "asset_name": asset_name,
+                "object_name": object_name,
+                "collection": collection,
+                "origin": origin,
+                "bake_materials": bake_materials,
+                "bake_resolution": bake_resolution,
             }
         ),
         encoding="utf-8",
@@ -262,3 +272,38 @@ def write_modeldoc(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(MODELDOC_HEADER + "\n" + _kv3(root) + "\n", encoding="utf-8")
     return destination
+
+
+def inspect_model(source: Path, output: Path, blender: Path, dependency_remap=None) -> dict:
+    """List source objects and collections without exporting or compiling."""
+    output.mkdir(parents=True, exist_ok=True)
+    job = output / "list-job.json"
+    result = output / "list-result.json"
+    result.unlink(missing_ok=True)
+    job.write_text(
+        json.dumps(
+            {
+                "source": str(source.resolve()),
+                "operation": "list",
+                "result": str(result.resolve()),
+                "dependency_remap": dependency_remap or {},
+            }
+        )
+    )
+    run_process(
+        [
+            str(blender),
+            "--background",
+            "--factory-startup",
+            "--disable-autoexec",
+            "--python-exit-code",
+            "1",
+            "--python",
+            str(Path(__file__).with_name("blender_worker.py")),
+            "--",
+            str(job.resolve()),
+        ],
+        output / "list.log",
+        timeout=600,
+    )
+    return json.loads(result.read_text())
