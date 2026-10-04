@@ -44,6 +44,8 @@ blend_app = typer.Typer(
 app.add_typer(projects_app, name="projects")
 app.add_typer(config_app, name="config")
 app.add_typer(blend_app, name="blend")
+context_menu_app = typer.Typer(no_args_is_help=True, help="Manage the Windows Explorer import entry.")
+app.add_typer(context_menu_app, name="context-menu")
 console = Console(highlight=False)
 errors = Console(stderr=True, highlight=False)
 
@@ -168,6 +170,46 @@ def emit(ctx, data, *, json=False):
             console.print(f"• {note}", style="yellow", markup=False)
     else:
         console.print_json(data=data)
+
+
+@context_menu_app.command("add")
+@guarded
+def context_menu_add(ctx: typer.Context, uv: Path | None = None, json: bool = False):
+    """Register supported files for the current user (Windows 11: Show more options)."""
+    from .context_menu import add
+
+    emit(ctx, add(uv), json=json)
+
+
+@context_menu_app.command("remove")
+@guarded
+def context_menu_remove(ctx: typer.Context, json: bool = False):
+    """Remove only the cs2asset Explorer entries."""
+    from .context_menu import remove
+
+    emit(ctx, remove(), json=json)
+
+
+@context_menu_app.command("status")
+@guarded
+def context_menu_status(ctx: typer.Context, json: bool = False):
+    """Inspect per-user Explorer registration."""
+    from .context_menu import status
+
+    emit(ctx, status(), json=json)
+
+
+@context_menu_app.command("import-file", hidden=True)
+def context_menu_import_file(ctx: typer.Context, asset: str):
+    """Import an Explorer-selected file and keep the console result visible."""
+    try:
+        ctx.invoke(import_command, asset=asset)
+    finally:
+        if sys.stdin.isatty():
+            try:
+                input("Press Enter to close...")
+            except (EOFError, KeyboardInterrupt):
+                pass
 
 
 @app.command()

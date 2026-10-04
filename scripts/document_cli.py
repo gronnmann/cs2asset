@@ -49,6 +49,8 @@ def generate():
             )
         if hasattr(command, "commands"):
             for child_name, child in sorted(command.commands.items()):
+                if child.hidden:
+                    continue
                 visit(child, f"{name} {child_name}")
 
     visit(get_command(app), "cs2asset")

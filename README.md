@@ -50,6 +50,28 @@ Create new addons through CS2 Workshop Tools before selecting them in `cs2asset`
 
 ## Quick start
 
+### Windows right-click import
+
+Register **Import into CS2 Hammer** for supported model files, HDR/EXR skies,
+and PBR texture ZIP archives:
+
+```powershell
+uvx cs2asset context-menu add
+uvx cs2asset context-menu status
+uvx cs2asset context-menu remove
+```
+
+Registration applies only to your Windows user and does not require administrator
+access or change default file associations. On Windows 11, use **Show more options**.
+Select one file at a time. The importer uses your saved addon, or prompts you to
+choose one, and keeps the console open until you press Enter after the import.
+
+The entry uses an absolute path to `uv.exe` to run the published `cs2asset` package,
+not a temporary Python environment. If uv is not on PATH, use
+`context-menu add --uv "C:\path\to\uv.exe"`. Run `add` again if you move uv.
+When testing an unreleased checkout, Explorer still runs the published package;
+the published version must include these commands before the entry can be used.
+
 Import local assets:
 
 ```powershell

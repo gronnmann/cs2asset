@@ -65,6 +65,35 @@ Set a user default or a portable default for a specific addon.
 | --- | --- | --- | --- |
 | `--project` | str | `None` |  |
 
+## `cs2asset context-menu`
+
+Manage the Windows Explorer import entry.
+
+## `cs2asset context-menu add`
+
+Register supported files for the current user (Windows 11: Show more options).
+
+| Argument / option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--uv` | path | `None` |  |
+| `--json / --no-json` | boolean | `False` |  |
+
+## `cs2asset context-menu remove`
+
+Remove only the cs2asset Explorer entries.
+
+| Argument / option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--json / --no-json` | boolean | `False` |  |
+
+## `cs2asset context-menu status`
+
+Inspect per-user Explorer registration.
+
+| Argument / option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--json / --no-json` | boolean | `False` |  |
+
 ## `cs2asset doctor`
 
 Check local tools, addon paths, and image-processing capabilities.
