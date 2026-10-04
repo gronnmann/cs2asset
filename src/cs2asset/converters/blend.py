@@ -12,6 +12,7 @@ from cs2asset.assets import BlendInput, MaterialInput
 from cs2asset.errors import CS2AssetError
 from cs2asset.images import normalize_map, read_image, write_image
 from cs2asset.materials import MATERIAL_PARAMETERS, prepare_material_maps, write_vmat
+from cs2asset.resource_names import resource_name
 
 BLEND_CONTRACT_VERSION = "csgo_environment_blend-25687242-v1"
 BLEND_WARNING = (
@@ -65,4 +66,4 @@ def create_blend(
         fields[f"TextureHeight{index}"] = height.relative_to(content).as_posix()
         warnings.extend(f"Layer {index}: {note}" for note in layer.resolved.warnings)
         warnings.extend(f"Layer {index}: {note}" for note in notes)
-    return write_vmat(content / resource_dir / "blend.vmat", fields), warnings
+    return write_vmat(content / resource_dir / f"{resource_name(blend.name)}.vmat", fields), warnings

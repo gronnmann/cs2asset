@@ -341,7 +341,7 @@ def test_blend_cli_dry_run_supports_mixed_sources(install, metadata, tmp_path):
     assert [s["provider"] for s in data["sources"]] == ["local", "polyhaven"]
     assert data["experimental"]
     assert data["validation"]["hammer_paint_verified"] is False
-    assert data["planned_resources"][0].endswith("blend.vmat")
+    assert data["planned_resources"][0].endswith("forest_rock.vmat")
     assert not (cache_dir() / "builds").exists()
 
 
@@ -370,4 +370,4 @@ def test_blend_terminal_preview_shows_layers_and_validation_limit(install, tmp_p
     assert "Layer 1:" in result.output and "Layer 2:" in result.output
     assert "Experimental environment blend" in result.output
     assert "unverified" in result.output
-    assert "blend.vmat" in "".join(result.output.split())
+    assert "forest_rock.vmat" in "".join(result.output.split())

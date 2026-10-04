@@ -108,7 +108,7 @@ def test_local_sky_pipeline_and_rebuild(workflow, tmp_path, extension):
     first = local_import(workflow, source)
     assert first["type"] == "hdris"
     assert first["detail"]["maximum_radiance"] == pytest.approx(4)
-    assert first["resources"][0].endswith("sky.vmat")
+    assert first["resources"][0].endswith("evening.vmat")
     second = rebuild_asset(
         workflow.installation, workflow.project, workflow.provider, workflow.cache, first["id"]
     )[0]
@@ -145,7 +145,7 @@ def test_local_model_reaches_existing_converter(workflow, tmp_path, monkeypatch,
     monkeypatch.setattr(pipeline, "create_material", create_material)
     first = local_import(workflow, source, blender=blender)
     assert first["type"] == "models"
-    assert first["resources"][-1].endswith("model.vmdl")
+    assert first["resources"][-1].endswith("rock.vmdl")
     assert first["detail"]["collision"] == "hull"
     assert first["snapshot"]["dependency_remap"]
 

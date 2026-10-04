@@ -22,6 +22,7 @@ from .images import read_image, write_image
 from .installer import Installer, contained_path, file_hash
 from .materials import TEMPLATE_VERSION, create_material, create_sky
 from .models import MODEL_CONVERTER_VERSION, export_model, write_modeldoc
+from .resource_names import model_material_names, resource_name
 from .sources import canonical_source, record_source, source_provider
 from .sources.base import input_path
 from .sources.local import SnapshotProvider
@@ -96,7 +97,8 @@ def convert_asset(
     """Source-independent conversion: only normalized local inputs cross this boundary."""
     resolved = normalized.resolved
     namespace = resolved.namespace
-    warnings, detail, resources = list(resolved.warnings), {}, []
+    warnings, detail, resources, aliases = list(resolved.warnings), {}, [], {}
+    name = resource_name(resolved.asset.name)
     payload = normalized.input
     if isinstance(payload, MaterialInput):
         maps = material_maps(normalized, build)
@@ -109,9 +111,11 @@ def convert_asset(
             constants=payload.constants,
             surface=options.surface,
             tiling=options.tiling,
+            name=name,
         )
         warnings.extend(notes)
         resources.append(material.relative_to(content).as_posix())
+        aliases[f"{resource_dir}/material.vmat"] = resources[-1]
     elif isinstance(payload, SkyInput):
         inputs = _limit_maps({"hdri": payload.path}, resolved, build / "resized")
         material, detail = create_sky(
@@ -120,17 +124,29 @@ def convert_asset(
             inputs["hdri"],
             yaw=options.yaw,
             exposure=options.exposure,
+            name=name,
         )
         resources.append(material.relative_to(content).as_posix())
+        aliases[f"materials/skybox/cs2asset/{namespace}/{variant}/sky.vmat"] = resources[-1]
     elif isinstance(payload, ModelInput):
-        kwargs = {"scale": options.scale}
+        material_root = f"materials/cs2asset/{namespace}/{variant}"
+        kwargs = {
+            "scale": options.scale,
+            "material_resource_root": material_root,
+            "asset_name": name,
+        }
         if payload.dependency_remap:
             kwargs["dependency_remap"] = payload.dependency_remap
         exported = export_model(payload.path, build / "model", blender, **kwargs)
         warnings.extend(exported.warnings)
         remaps = {}
+        material_names = model_material_names(
+            name, [material.source_name or material.name for material in exported.materials]
+        )
         for index, material in enumerate(exported.materials):
-            directory = f"materials/cs2asset/{namespace}/{variant}/m{index:03d}"
+            directory = material_root
+            if len(exported.materials) > 1:
+                directory += f"/m{index:03d}"
             maps = {("base_color" if k == "color" else k): v for k, v in material.maps.items()}
             maps = _limit_maps(maps, resolved, build / "resized" / f"m{index:03d}")
             constants = {
@@ -144,8 +160,10 @@ def convert_asset(
                 surface=options.surface,
                 tiling=options.tiling,
                 normal_format=options.normal_format or "gl",
+                name=material_names[index],
             )
             remaps[material.name] = generated.relative_to(content).as_posix()
+            aliases[f"{material_root}/m{index:03d}/material.vmat"] = remaps[material.name]
             warnings.extend(material.warnings + notes)
         directory = f"models/cs2asset/{namespace}/{variant}"
         target = content / directory
@@ -156,7 +174,7 @@ def convert_asset(
             shutil.copy2(fbx, target / filename)
             lod_resources[level] = f"{directory}/{filename}"
         model = write_modeldoc(
-            target / "model.vmdl",
+            target / f"{name}.vmdl",
             f"{directory}/mesh.fbx",
             remaps,
             collision=options.collision,
@@ -164,6 +182,7 @@ def convert_asset(
             lod_resources=lod_resources,
         )
         resources.append(model.relative_to(content).as_posix())
+        aliases[f"{directory}/model.vmdl"] = resources[-1]
         detail = {
             "dimensions_units": exported.dimensions_units,
             "mesh_count": exported.mesh_count,
@@ -192,6 +211,7 @@ def convert_asset(
         "content_hashes": {p: file_hash(f) for p, f in _file_set(content).items()},
         "input_sha256": normalized.input_sha256,
         "snapshot": normalized.snapshot,
+        "alias_candidates": aliases,
     }
 
 
@@ -247,7 +267,14 @@ def _tool_fingerprint(installation: Installation, blender: Path | None) -> dict:
         "blender": identity(blender),
         "converter_sources": {
             name: file_hash(Path(__file__).with_name(name))
-            for name in ("images.py", "materials.py", "models.py", "blender_worker.py", "pipeline.py")
+            for name in (
+                "images.py",
+                "materials.py",
+                "models.py",
+                "blender_worker.py",
+                "pipeline.py",
+                "resource_names.py",
+            )
         },
     }
 
@@ -315,6 +342,42 @@ def _stage(installation: Installation, fingerprint: str):
     return content, game
 
 
+def legacy_resource_paths(previous: dict) -> list[str]:
+    """Retain previously installed generic resource names as compatibility copies."""
+    return sorted(
+        {
+            output["path"]
+            for output in previous.get("outputs", [])
+            if output["root"] == "content"
+            and Path(output["path"]).name
+            in {"model.vmdl", "material.vmat", "sky.vmat", "blend.vmat"}
+        }
+        | set(previous.get("resource_aliases", {}))
+    )
+
+
+def previous_import(project: Project, import_id: str) -> dict:
+    installer = Installer(project)
+    if not installer.manifest_path.exists() and not installer.journal_path.exists():
+        return {}
+    return installer.imports().get(import_id, {})
+
+
+def retain_resource_aliases(converted: dict, content: Path, legacy_paths: list[str]) -> dict:
+    aliases = {
+        old: new
+        for old, new in converted.get("alias_candidates", {}).items()
+        if old in legacy_paths and old != new
+    }
+    for old, new in aliases.items():
+        target = contained_path(content, old)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(contained_path(content, new), target)
+    converted["resource_aliases"] = aliases
+    converted["content_hashes"] = {p: file_hash(f) for p, f in _file_set(content).items()}
+    return converted
+
+
 def import_asset(
     installation: Installation,
     project: Project,
@@ -360,21 +423,25 @@ def import_asset(
         if blender is None:
             raise CS2AssetError("Blender is required for models. Install Blender or set --blender.")
     resolved = source.prepare(resolved, blender=blender)
+    import_id = f"{resolved.identity}:{variant}"
+    previous = previous_import(project, import_id)
+    legacy_paths = legacy_resource_paths(previous)
     description = plan_import(resolved, effective)
     tools = _tool_fingerprint(installation, blender if resolved.asset.type == "models" else None)
     identity = {
         "source": asdict(resolved.source),
         "namespace": resolved.namespace,
+        "resource_name": resource_name(resolved.asset.name),
         "asset": resolved.asset.id,
         "type": resolved.asset.type,
         "files": [asdict(f) for f in resolved.files],
         "choices": resolved.choices,
         "options": asdict(effective),
         "tools": tools,
+        "legacy_paths": legacy_paths,
     }
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     # Variant identity depends on user settings, so a tool update rebuilds in place.
-    import_id = f"{resolved.identity}:{variant}"
     build = cache / "builds" / fingerprint
     build.mkdir(parents=True, exist_ok=True)
     stage_parent = installation.content_dir / "csgo_addons"
@@ -391,18 +458,24 @@ def import_asset(
             normalized = source.materialize(resolved, build / "inputs")
             announce("Converting source assets")
             converted = convert_asset(normalized, content, build, variant, effective, blender)
+            retain_resource_aliases(converted, content, legacy_paths)
             atomic_json(ready_path, converted)
         else:
             announce("Reusing verified converted sources")
         announce("Compiling with Valve resourcecompiler")
+        compiler_warnings = []
         compiled = compile_resources(
             installation,
             content,
             game,
-            [content / p for p in converted["resources"]],
+            [
+                content / p
+                for p in [*converted["resources"], *converted.get("resource_aliases", {})]
+            ],
             build / "logs",
             force=force,
             progress=compiler_progress,
+            diagnostics=compiler_warnings,
         )
         announce(f"Installing into Hammer addon {project.name}")
         metadata = {
@@ -418,7 +491,12 @@ def import_asset(
             "tools": tools,
             "input_sha256": converted.get("input_sha256", {}),
             "resources": converted["resources"],
-            "warnings": converted["warnings"],
+            "warnings": [
+                *converted["warnings"],
+                *[f"Valve ({w['resource']}): {w['message']}" for w in compiler_warnings],
+            ],
+            "compiler_warnings": compiler_warnings,
+            "resource_aliases": converted.get("resource_aliases", {}),
             "detail": converted["detail"],
             "logs": str(build / "logs"),
             "compiler_help": executable_version(installation.compiler, ("-help",)),

@@ -14,7 +14,7 @@ MODELDOC_HEADER = (
     "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} "
     "format:modeldoc36:version{972dada4-b828-45a4-bb93-7795cf0585da} -->"
 )
-MODEL_CONVERTER_VERSION = 2
+MODEL_CONVERTER_VERSION = 3
 
 
 @dataclass
@@ -46,6 +46,8 @@ def export_model(
     scale: float = 1.0,
     timeout: float = 600,
     dependency_remap: dict[str, str] | None = None,
+    material_resource_root: str | None = None,
+    asset_name: str | None = None,
 ) -> ModelExport:
     """Evaluate static geometry, export inch-sized Z-up FBX, and inspect materials.
 
@@ -73,6 +75,8 @@ def export_model(
                 "result": str(result.resolve()),
                 "scale": scale,
                 "dependency_remap": dependency_remap or {},
+                "material_resource_root": material_resource_root,
+                "asset_name": asset_name,
             }
         ),
         encoding="utf-8",
@@ -161,6 +165,12 @@ def write_modeldoc(
     if collision not in {"hull", "none"}:
         raise CS2AssetError("Model collision must be 'hull' or 'none'.")
     fbx_resource = _resource(fbx_resource, ".fbx")
+    resources = {0: fbx_resource, **(lod_resources or {})}
+    if any(not isinstance(level, int) or level < 0 for level in resources):
+        raise CS2AssetError("LOD levels must be non-negative integers.")
+    resources = {level: _resource(resource, ".fbx") for level, resource in resources.items()}
+    fbx_resource = resources[0]
+    has_lods = len(resources) > 1
     remaps = []
     for name, material in material_remaps.items():
         material = _resource(material, ".vmat")
@@ -193,10 +203,7 @@ def write_modeldoc(
             ],
         },
     ]
-    if lod_resources:
-        resources = {0: fbx_resource, **lod_resources}
-        if any(not isinstance(level, int) or level < 0 for level in resources):
-            raise CS2AssetError("LOD levels must be non-negative integers.")
+    if has_lods:
         children[1]["children"] = [
             {
                 "_class": "RenderMeshFile",
@@ -235,7 +242,7 @@ def write_modeldoc(
                         "faceMergeAngle": 20.0,
                         "maxHullVertices": 32,
                         "optimization_algorithm": "IFR",
-                        "renderMeshList": ["lod0"] if lod_resources else [],
+                        "renderMeshList": ["lod0"] if has_lods else [],
                     }
                 ],
                 "leave_body_collision_unmodified": False,

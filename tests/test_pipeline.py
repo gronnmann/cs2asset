@@ -46,6 +46,50 @@ def test_repeated_import_reuses_verified_conversion_but_checks_compiler(workflow
     assert "Reusing verified converted sources" in workflow.phases
 
 
+def test_named_material_migration_retains_owned_legacy_resource(workflow, monkeypatch):
+    named = module.create_material
+
+    def old_material(content, directory, maps, **kwargs):
+        kwargs.pop("name")
+        return named(content, directory, maps, **kwargs)
+
+    monkeypatch.setattr(module, "create_material", old_material)
+    old = run(workflow)
+    assert old["resources"][0].endswith("/material.vmat")
+    monkeypatch.setattr(module, "create_material", named)
+    migrated = run(workflow)
+    assert migrated["resources"][0].endswith("/a_test_material.vmat")
+    assert migrated["id"] == old["id"]
+    assert migrated["resource_aliases"] == {old["resources"][0]: migrated["resources"][0]}
+    assert (workflow.project.content_dir / old["resources"][0]).exists()
+    assert (workflow.project.game_dir / (old["resources"][0] + "_c")).exists()
+    again = rebuild_asset(
+        workflow.installation, workflow.project, workflow.provider, workflow.cache, migrated["id"]
+    )[0]
+    assert again["fingerprint"] == migrated["fingerprint"]
+    assert again["resource_aliases"] == migrated["resource_aliases"]
+
+
+def test_valve_warning_is_in_record_and_combined_warnings(workflow, monkeypatch):
+    compiler = module.compile_resources
+
+    def warned(*args, **kwargs):
+        outputs = compiler(*args, **kwargs)
+        kwargs["diagnostics"].append(
+            {"resource": "materials/test.vmat", "message": "Probe warning", "log": "probe.log"}
+        )
+        return outputs
+
+    monkeypatch.setattr(module, "compile_resources", warned)
+    record = run(workflow)
+    assert record["compiler_warnings"][0]["message"] == "Probe warning"
+    assert "Valve (materials/test.vmat): Probe warning" in record["warnings"]
+    assert (
+        Installer(workflow.project).imports()[record["id"]]["compiler_warnings"]
+        == record["compiler_warnings"]
+    )
+
+
 def test_modified_cached_source_triggers_reconversion(workflow):
     first = run(workflow)
     stage = (

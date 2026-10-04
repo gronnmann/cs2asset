@@ -22,9 +22,13 @@ from .pipeline import (
     _file_set,
     _stage,
     _tool_fingerprint,
+    legacy_resource_paths,
     material_maps,
     plan_import,
+    previous_import,
+    retain_resource_aliases,
 )
+from .resource_names import resource_name
 from .sources import source_provider
 from .sources.local import SnapshotProvider
 
@@ -118,10 +122,13 @@ def create_blend_asset(
             **description,
             "dry_run": True,
             "project": project.name,
-            "planned_resources": [f"{namespace}/blend.vmat"],
+            "planned_resources": [f"{namespace}/{resource_name(name)}.vmat"],
         }
     # Verify cached snapshots even if converted resources will be reused.
     resolved = [source.prepare(r) for source, r in zip(providers, resolved, strict=True)]
+    import_id = f"blend:{identifier}:{variant}"
+    previous = previous_import(project, import_id)
+    legacy_paths = legacy_resource_paths(previous)
     tools = _tool_fingerprint(installation, None)
     tools["blend_contract"] = BLEND_CONTRACT_VERSION
     tools["blend_converter"] = file_hash(Path(__file__).parent / "converters/blend.py")
@@ -129,6 +136,7 @@ def create_blend_asset(
         "recipe": description["recipe"],
         "inputs": [asdict(r) for r in resolved],
         "tools": tools,
+        "legacy_paths": legacy_paths,
     }
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     build = cache / "builds" / fingerprint
@@ -168,19 +176,28 @@ def create_blend_asset(
                 "content_hashes": {p: file_hash(f) for p, f in _file_set(content).items()},
                 "input_sha256": [layer.input_sha256 for layer in layers],
                 "snapshots": [layer.snapshot for layer in layers],
+                "alias_candidates": {
+                    f"{namespace}/blend.vmat": material.relative_to(content).as_posix()
+                },
             }
+            retain_resource_aliases(converted, content, legacy_paths)
             atomic_json(ready, converted)
         else:
             announce("Reusing verified converted blend sources")
         announce("Compiling environment blend with Valve resourcecompiler")
+        compiler_warnings = []
         compiled = compile_resources(
             installation,
             content,
             game,
-            [content / p for p in converted["resources"]],
+            [
+                content / p
+                for p in [*converted["resources"], *converted.get("resource_aliases", {})]
+            ],
             build / "logs",
             force=force,
             progress=compiler_progress,
+            diagnostics=compiler_warnings,
         )
         metadata = {
             **description,
@@ -188,14 +205,19 @@ def create_blend_asset(
             "fingerprint": fingerprint,
             "tools": tools,
             "resources": converted["resources"],
-            "warnings": converted["warnings"],
+            "warnings": [
+                *converted["warnings"],
+                *[f"Valve ({w['resource']}): {w['message']}" for w in compiler_warnings],
+            ],
+            "compiler_warnings": compiler_warnings,
+            "resource_aliases": converted.get("resource_aliases", {}),
             "snapshots": converted["snapshots"],
             "input_sha256": converted["input_sha256"],
             "logs": str(build / "logs"),
         }
         announce(f"Installing environment blend into {project.name}")
         return Installer(project).install(
-            f"blend:{identifier}:{variant}",
+            import_id,
             {p: contained_path(content, p) for p in converted["content_hashes"]},
             compiled,
             metadata,

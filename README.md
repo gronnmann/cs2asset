@@ -472,6 +472,22 @@ models/cs2asset/
 
 This keeps imported resources separate from manually created addon assets.
 
+Resource filenames use the asset name, so Hammer displays names such as
+`lifebuoy.vmdl`, `lifebuoy.vmat`, and `snow_road.vmat` instead of `model.vmdl`
+or `blend.vmat`. Provider/asset/variant folders still separate sources and settings.
+A model with one material puts its named VMAT directly in its material variant
+folder; several materials use names such as `lifebuoy_rope.vmat` in separate folders.
+
+Rebuild older imports to get these names. Previously owned generic resource paths
+remain as editable and compiled compatibility copies, preserving existing map
+references. New imports do not create these copies. The manifest records them in
+`resource_aliases`.
+
+Valve compiler warnings appear in terminal/JSON output and the manifest's combined
+`warnings` list. `compiler_warnings` records each warning's resource, message, and
+log path. Warnings remain visible after an unchanged dependency check and clear
+after a clean rebuild.
+
 `cs2asset` also retains the information needed to rebuild previously imported assets.
 
 ## Limitations

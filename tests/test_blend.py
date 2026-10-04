@@ -39,7 +39,7 @@ def test_two_local_materials_compile_and_record_ordered_provenance(compile_blend
     assert record["validation"]["hammer_paint_verified"] is False
     assert [s["uri"] for s in record["sources"]] == layers
     assert [s["provider"] for s in record["sources"]] == ["local", "local"]
-    assert record["resources"][0].endswith("blend.vmat")
+    assert record["resources"][0].endswith("forest_rock.vmat")
     text = (w.project.content_dir / record["resources"][0]).read_text()
     assert 'shader "csgo_environment_blend.vfx"' in text
     assert "TextureColor1" in text and "TextureColor2" in text
@@ -98,7 +98,7 @@ def test_blend_dry_run_has_no_snapshots_or_installation(workflow, layers):
         dry_run=True,
     )
     assert result["dry_run"]
-    assert result["planned_resources"][0].endswith("blend.vmat")
+    assert result["planned_resources"][0].endswith("forest_rock.vmat")
     assert not w.cache.exists()
     assert not w.project.content_dir.exists()
     assert w.counts == {"download": 0, "convert": 0, "compile": 0}
@@ -167,7 +167,7 @@ def test_polyhaven_and_mixed_layers_share_resolution_and_converter(compile_blend
     assert [s["provider"] for s in record["sources"]] == [
         "local" if v == "local" else "polyhaven" for v in inputs
     ]
-    assert record["resources"][0].endswith("blend.vmat")
+    assert record["resources"][0].endswith("mixed.vmat")
     assert record["recipe"]["layer_options"][-1]["resolution"] == "2k"
 
 
@@ -193,3 +193,50 @@ def test_blend_cached_inputs_rebuild_and_failed_compile_preserves_record(
             w.installation, w.project, w.provider, w.cache, first["id"], cached_inputs=True
         )
     assert Installer(w.project).imports()[first["id"]] == cached
+
+
+def test_blend_legacy_name_migrates_with_compiled_compatibility_copy(
+    compile_blend, layers, monkeypatch
+):
+    named = blend.create_blend
+
+    def legacy(*args, **kwargs):
+        material, warnings = named(*args, **kwargs)
+        old = material.with_name("blend.vmat")
+        material.rename(old)
+        return old, warnings
+
+    w = compile_blend
+    monkeypatch.setattr(blend, "create_blend", legacy)
+    first = create_blend_asset(
+        w.installation, w.project, w.provider, w.cache, *layers, "forest_rock", ImportOptions()
+    )
+    monkeypatch.setattr(blend, "create_blend", named)
+    migrated = rebuild_asset(w.installation, w.project, w.provider, w.cache, first["id"])[0]
+    assert migrated["resources"][0].endswith("/forest_rock.vmat")
+    assert migrated["resource_aliases"] == {first["resources"][0]: migrated["resources"][0]}
+    assert (w.project.game_dir / (first["resources"][0] + "_c")).is_file()
+    repeated = rebuild_asset(w.installation, w.project, w.provider, w.cache, first["id"])[0]
+    assert repeated["fingerprint"] == migrated["fingerprint"]
+
+
+def test_blend_valve_warning_is_in_manifest(compile_blend, layers, monkeypatch):
+    original = blend.compile_resources
+
+    def warned(*args, **kwargs):
+        result = original(*args, **kwargs)
+        kwargs["diagnostics"].append(
+            {"resource": "materials/probe.vmat", "message": "Probe warning", "log": "probe.log"}
+        )
+        return result
+
+    monkeypatch.setattr(blend, "compile_resources", warned)
+    w = compile_blend
+    record = create_blend_asset(
+        w.installation, w.project, w.provider, w.cache, *layers, "forest_rock", ImportOptions()
+    )
+    assert "Valve (materials/probe.vmat): Probe warning" in record["warnings"]
+    assert (
+        Installer(w.project).imports()[record["id"]]["compiler_warnings"]
+        == record["compiler_warnings"]
+    )

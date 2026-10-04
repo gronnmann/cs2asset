@@ -342,6 +342,7 @@ def main(job: dict) -> dict:
     export_scene = bpy.data.scenes.new("cs2asset_export")
     bpy.context.window.scene = export_scene
     materials = []
+    material_objects = []
     seen = set()
     coords = []
     triangle_count = 0
@@ -367,6 +368,7 @@ def main(job: dict) -> dict:
             if material.as_pointer() not in seen:
                 seen.add(material.as_pointer())
                 materials.append(material_info(material, len(materials), output))
+                material_objects.append(material)
         if not mesh.uv_layers:
             if any(m["maps"] for m in materials):
                 raise RuntimeError(f"Textured mesh {name!r} has no UV coordinates")
@@ -376,6 +378,24 @@ def main(job: dict) -> dict:
         if level in {None, 0}:
             coords.extend(Vector(c) for c in obj.bound_box)
     dimensions = [max(c[i] for c in coords) - min(c[i] for c in coords) for i in range(3)]
+    if job.get("material_resource_root"):
+        # The converter supplies resource destinations; source/provider resolution
+        # is independent of the Blender material export.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from resource_names import model_material_names
+
+        names = model_material_names(job["asset_name"], [m["source_name"] for m in materials])
+        for index, (material, info, name) in enumerate(zip(material_objects, materials, names)):
+            directory = job["material_resource_root"]
+            if len(materials) > 1:
+                directory += f"/m{index:03d}"
+            requested = f"{directory}/{name}"
+            material.name = requested
+            info["name"] = material.name
+            if material.name != requested:
+                warnings.append(
+                    "Blender shortened a material resource name; ModelDoc remapping is used."
+                )
     export_scene.unit_settings.system = "NONE"
     export_scene.unit_settings.scale_length = 1.0
     fbx = output / "mesh.fbx"

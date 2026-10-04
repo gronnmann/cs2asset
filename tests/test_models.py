@@ -33,6 +33,36 @@ def test_unsupported_collision_is_not_silently_ignored(tmp_path):
         write_modeldoc(tmp_path / "model.vmdl", "models/mesh.fbx", {}, collision="concave")
 
 
+@pytest.mark.parametrize("lods", [None, {}, {0: "models/mesh.fbx"}])
+def test_single_mesh_omits_lod_groups_and_uses_it_for_collision(tmp_path, lods):
+    model = write_modeldoc(tmp_path / "rock.vmdl", "models/mesh.fbx", {}, lod_resources=lods)
+    text = model.read_text()
+    assert "LODGroupList" not in text
+    assert 'name = "mesh"' in text
+    assert "PhysicsHullFromRender" in text
+    assert '"lod0"' not in text
+
+
+def test_implicit_base_lod_and_one_lower_lod_keep_groups(tmp_path):
+    model = write_modeldoc(
+        tmp_path / "rock.vmdl", "models/mesh.fbx", {}, lod_resources={1: "models/lod1.fbx"}
+    )
+    text = model.read_text()
+    assert "LODGroupList" in text
+    assert '"lod0"' in text and '"lod1"' in text
+
+
+def test_single_lod_resource_is_validated_and_used(tmp_path):
+    with pytest.raises(CS2AssetError, match="addon-relative"):
+        write_modeldoc(
+            tmp_path / "rock.vmdl", "models/base.fbx", {}, lod_resources={0: "../bad.fbx"}
+        )
+    result = write_modeldoc(
+        tmp_path / "rock.vmdl", "models/base.fbx", {}, lod_resources={0: "models/actual.fbx"}
+    )
+    assert 'filename = "models/actual.fbx"' in result.read_text()
+
+
 def test_modeldoc_escapes_source_names_and_preserves_lods(tmp_path):
     model = write_modeldoc(
         tmp_path / "model.vmdl",

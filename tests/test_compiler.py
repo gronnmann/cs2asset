@@ -74,6 +74,42 @@ def test_explicit_valve_dependency_skip_reuses_output(staged, monkeypatch):
     assert "materials/test.vmat_c" in invoke(staged)
 
 
+def test_warning_diagnostics_survive_skip_and_clear_after_clean_compile(staged, monkeypatch):
+    def warning_compile(*args, **kwargs):
+        staged[4].write_bytes(b"compiled with warning")
+        return (
+            "RESOURCE COMPILE WARNING: LODGroupList : Only a single LOD group specified, ignoring\n"
+            "1 Compile WARNINGS\nWARNING: 1 compiled, 0 failed, 0 skipped"
+        )
+
+    monkeypatch.setattr(module, "run_process", warning_compile)
+    warnings = []
+    invoke(staged, diagnostics=warnings)
+    assert len(warnings) == 1
+    assert warnings[0]["resource"] == "materials/test.vmat"
+    assert "single LOD" in warnings[0]["message"]
+    monkeypatch.setattr(
+        module, "run_process", lambda *a, **kw: "OK: 0 compiled, 0 failed, 1 skipped"
+    )
+    skipped = []
+    invoke(staged, diagnostics=skipped)
+    assert skipped == warnings
+
+    def clean_compile(*args, **kwargs):
+        staged[4].write_bytes(b"clean rebuilt material")
+        return "OK: 1 compiled, 0 failed, 0 skipped"
+
+    monkeypatch.setattr(module, "run_process", clean_compile)
+    cleared = []
+    invoke(staged, diagnostics=cleared)
+    assert cleared == []
+    monkeypatch.setattr(
+        module, "run_process", lambda *a, **kw: "OK: 0 compiled, 0 failed, 1 skipped"
+    )
+    invoke(staged, diagnostics=cleared)
+    assert cleared == []
+
+
 @pytest.mark.parametrize(
     "text",
     [

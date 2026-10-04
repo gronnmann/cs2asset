@@ -69,7 +69,7 @@ def workflow(tmp_path, monkeypatch):
 
     def material(content, directory, maps, **kwargs):
         counts["convert"] += 1
-        target = content / directory / "material.vmat"
+        target = content / directory / (kwargs.get("name", "material") + ".vmat")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("source material")
         (target.parent / "color.png").write_bytes(maps["base_color"].read_bytes())

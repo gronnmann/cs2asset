@@ -2,6 +2,7 @@
 
 import os
 import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -91,6 +92,12 @@ def test_real_local_model_formats(local_tools, extension):
         assert first["detail"]["dimensions_units"] == pytest.approx([1 / 0.0254] * 3, rel=1e-4)
         assert first["detail"]["mesh_count"] == 1
         assert first["snapshot"]
+        assert first["resources"][-1].endswith("/cube.vmdl")
+        assert first["compiler_warnings"] == []
+        compile_log = (
+            root / "cache/builds" / first["fingerprint"] / "logs/compile-000.log"
+        ).read_text()
+        assert "GetFbxMaterialPath Failed" not in compile_log
         assert any(p["path"].endswith(".vmdl_c") for p in first["outputs"])
         second = rebuild_asset(
             installation, project, provider, root / "cache", first["id"], blender=blender
@@ -108,6 +115,8 @@ def test_real_local_model_formats(local_tools, extension):
         )
         assert "PHYS" in info
         assert "materials/cs2asset/local/" in info
+        assert "/cube.vmat" in info
+        assert "compile_warnings = 0" in info
 
 
 @pytest.mark.parametrize("extension", [".hdr", ".exr"])
@@ -285,3 +294,69 @@ def test_real_local_material_and_environment_blend_packing(local_tools):
             rebuild_asset(installation, project, provider, root / "cache", record["id"])[0]["id"]
             == record["id"]
         )
+
+
+def test_real_named_model_materials_preserve_distinct_bindings(local_tools):
+    installation, project, blender, root = local_tools
+    source = root / "lifebuoy_parts.blend"
+    script = root / "create_multi_material.py"
+    script.write_text(
+        f"""
+import bpy
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.mesh.primitive_cube_add(size=1)
+for name, color in [('Rubber', (0.8, 0.1, 0.1, 1)), ('Rope', (0.1, 0.8, 0.1, 1))]:
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    material.node_tree.nodes.get('Principled BSDF').inputs['Base Color'].default_value = color
+    bpy.context.object.data.materials.append(material)
+for index, polygon in enumerate(bpy.context.object.data.polygons):
+    polygon.material_index = index % 2
+bpy.ops.wm.save_as_mainfile(filepath={str(source)!r})
+""",
+        encoding="utf-8",
+    )
+    run_process(
+        [
+            str(blender),
+            "--background",
+            "--factory-startup",
+            "--disable-autoexec",
+            "--python-exit-code",
+            "1",
+            "--python",
+            str(script),
+        ],
+        root / "multi-generation.log",
+    )
+    with SourceRegistry(root / "cache", offline=True) as provider:
+        result = import_asset(
+            installation,
+            project,
+            provider,
+            root / "cache",
+            str(source),
+            ImportOptions(),
+            blender=blender,
+        )
+    assert result["compiler_warnings"] == []
+    paths = [
+        item["path"]
+        for item in result["outputs"]
+        if item["root"] == "content" and item["path"].endswith(".vmat")
+    ]
+    assert len(paths) == 2
+    assert any(path.endswith("/lifebuoy_parts_rubber.vmat") for path in paths)
+    assert any(path.endswith("/lifebuoy_parts_rope.vmat") for path in paths)
+    info = run_process(
+        [
+            str(installation.compiler.with_name("resourceinfo.exe")),
+            "-all",
+            "-i",
+            str(project.game_dir / (result["resources"][0] + "_c")),
+        ],
+        root / "multi-info.log",
+    )
+    assert all(path in info for path in paths)
+    log = Path(result["logs"]) / "compile-000.log"
+    assert "GetFbxMaterialPath Failed" not in log.read_text()

@@ -8,6 +8,7 @@ import numpy as np
 
 from .errors import CS2AssetError
 from .images import linear_to_srgb, normalize_map, read_image, rotate_panorama, write_image
+from .resource_names import resource_name
 
 TEMPLATE_VERSION = 2
 
@@ -78,8 +79,9 @@ def create_material(
     constants: dict | None = None,
     surface: str = "default",
     tiling: float = 1.0,
+    name: str = "material",
 ) -> tuple[Path, list[str]]:
-    """Write material.vmat and normalized maps using the validated CS2 complex contract."""
+    """Write a named material and normalized maps using the validated CS2 complex contract."""
     if not math.isfinite(tiling) or tiling <= 0:
         raise CS2AssetError("Material tiling must be a finite positive number")
     destination = content / resource_dir
@@ -106,11 +108,17 @@ def create_material(
         warnings.append("Opacity uses alpha testing (cutout), not blended transparency")
     if "height" in maps:
         warnings.append("Height map is retained in the input cache; displacement is not enabled")
-    return write_vmat(destination / "material.vmat", fields), warnings
+    return write_vmat(destination / f"{resource_name(name)}.vmat", fields), warnings
 
 
 def create_sky(
-    content: Path, resource_dir: str, source: Path, *, yaw: float = 0, exposure: float = 0
+    content: Path,
+    resource_dir: str,
+    source: Path,
+    *,
+    yaw: float = 0,
+    exposure: float = 0,
+    name: str = "sky",
 ) -> tuple[Path, dict]:
     if not math.isfinite(exposure) or not -32 <= exposure <= 32:
         raise CS2AssetError("Sky exposure must be finite and between -32 and 32 stops")
@@ -125,7 +133,7 @@ def create_sky(
     write_image(output / "sky.exr", pixels, hdr=True)
     # SkyTexture (not TextureSky) makes Valve generate the HDR cubemap and SH data.
     material = write_vmat(
-        output / "sky.vmat",
+        output / f"{resource_name(name)}.vmat",
         {
             "shader": "sky.vfx",
             "SkyTexture": f"{resource_dir}/sky.exr",

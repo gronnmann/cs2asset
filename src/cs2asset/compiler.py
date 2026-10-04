@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from .config import atomic_json, read_json
 from .errors import CS2AssetError
 
 
@@ -108,6 +109,7 @@ def compile_resources(
     force: bool = False,
     timeout: float = 600,
     progress=None,
+    diagnostics: list[dict] | None = None,
 ) -> dict[str, Path]:
     """Compile source roots and collect every child resource generated in staging."""
     if not sources:
@@ -115,6 +117,8 @@ def compile_resources(
     content = content.resolve()
     game = game.resolve()
     game.mkdir(parents=True, exist_ok=True)
+    saved = read_json(logs / "diagnostics.json").get("warnings", {})
+    warnings_by_resource = {}
     for index, source in enumerate(sources):
         source = source.resolve()
         try:
@@ -166,6 +170,33 @@ def compile_resources(
             raise CS2AssetError(
                 f"Compiler left a stale output without validating it: {expected}. See {logs}"
             )
+        resource = relative.as_posix()
+        messages = []
+        for line in text.splitlines():
+            warning = re.match(r"\s*(?:RESOURCE COMPILE WARNING|WARNING|WARN):\s*(.+)", line)
+            if (
+                warning
+                and not re.search(r"\d+ compiled,\s*\d+ failed", warning[1])
+                and warning[1] not in messages
+            ):
+                messages.append(warning[1])
+        count = re.search(r"\b(\d+) Compile WARNINGS", text)
+        if count and int(count[1]) > len(messages):
+            messages.append(f"Valve reported {count[1]} compile warnings; see the compiler log.")
+        records = [
+            {
+                "resource": resource,
+                "message": message,
+                "log": str(logs / f"compile-{index:03d}.log"),
+            }
+            for message in messages
+        ]
+        if not records and validated_skip and int(summary[1]) == 0:
+            records = saved.get(resource, [])
+        warnings_by_resource[resource] = records
+        if diagnostics is not None:
+            diagnostics.extend(records)
+    atomic_json(logs / "diagnostics.json", {"warnings": warnings_by_resource})
     return {
         p.relative_to(game).as_posix(): p
         for p in game.rglob("*")
