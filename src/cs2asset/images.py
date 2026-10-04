@@ -31,7 +31,9 @@ def read_image(path: Path) -> np.ndarray:
         reader.close()
 
 
-def write_image(path: Path, pixels: np.ndarray, *, hdr: bool = False) -> Path:
+def write_image(
+    path: Path, pixels: np.ndarray, *, hdr: bool = False, full_float: bool = False
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     pixels = np.ascontiguousarray(pixels, dtype=np.float32)
     if pixels.ndim == 2:
@@ -44,13 +46,19 @@ def write_image(path: Path, pixels: np.ndarray, *, hdr: bool = False) -> Path:
         raise CS2AssetError(f"Expected a nonempty image with 1-4 channels: {path}")
     if not np.isfinite(pixels).all():
         raise CS2AssetError(f"Cannot write non-finite pixels: {path}")
-    if hdr and (pixels.min() < 0 or pixels.max() > 65504):
-        raise CS2AssetError("HDR values must be between 0 and 65504 for half-float sky sources")
+    if hdr and not full_float and (pixels.min() < 0 or pixels.max() > 65504):
+        raise CS2AssetError(
+            f"HDR values must be between 0 and 65504 for half-float sky sources "
+            f"(minimum={float(pixels.min()):.6g}, maximum={float(pixels.max()):.6g})"
+        )
     out = oiio.ImageOutput.create(str(path))
     if out is None:
         raise CS2AssetError(f"Cannot create image {path}: {oiio.geterror()}")
     spec = oiio.ImageSpec(
-        pixels.shape[1], pixels.shape[0], pixels.shape[2], oiio.HALF if hdr else oiio.UINT16
+        pixels.shape[1],
+        pixels.shape[0],
+        pixels.shape[2],
+        oiio.FLOAT if full_float else oiio.HALF if hdr else oiio.UINT16,
     )
     # Keep alpha unassociated: normal/data channels must never be premultiplied.
     spec.attribute("oiio:UnassociatedAlpha", 1)
@@ -78,7 +86,10 @@ def resize_image(source: Path, target: Path, limit: int) -> Path:
     if resized.has_error:
         raise CS2AssetError(f"Cannot resize {source}: {resized.geterror()}")
     return write_image(
-        target, resized.get_pixels(oiio.FLOAT), hdr=source.suffix.lower() in {".hdr", ".exr"}
+        target,
+        resized.get_pixels(oiio.FLOAT),
+        hdr=source.suffix.lower() in {".hdr", ".exr"},
+        full_float=source.suffix.lower() in {".hdr", ".exr"},
     )
 
 

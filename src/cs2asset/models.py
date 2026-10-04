@@ -14,7 +14,7 @@ MODELDOC_HEADER = (
     "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} "
     "format:modeldoc36:version{972dada4-b828-45a4-bb93-7795cf0585da} -->"
 )
-MODEL_CONVERTER_VERSION = 4
+MODEL_CONVERTER_VERSION = 5
 
 
 @dataclass

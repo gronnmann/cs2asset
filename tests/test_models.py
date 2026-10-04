@@ -259,3 +259,65 @@ bpy.ops.wm.save_as_mainfile(filepath={str(bad_source)!r})
     )
     with pytest.raises(CS2AssetError, match="Unsupported procedural material node"):
         export_model(bad_source, tmp_path / "bad_export", blender)
+
+
+@pytest.mark.integration
+def test_embedded_fbx_survives_without_external_texture(tmp_path):
+    import subprocess
+
+    import numpy as np
+
+    from cs2asset.discovery import discover_blender
+    from cs2asset.images import read_image, write_image
+    from cs2asset.sources.local import LocalFileProvider
+
+    blender = discover_blender()
+    if blender is None:
+        pytest.skip("Blender is required")
+    texture = write_image(tmp_path / "unique.png", np.broadcast_to([0.8, 0.2, 0.1], (8, 8, 3)))
+    source = tmp_path / "embedded.fbx"
+    script = tmp_path / "generate.py"
+    script.write_text(
+        f"""
+import bpy
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.mesh.primitive_cube_add()
+obj = bpy.context.object
+mat = bpy.data.materials.new('EmbeddedMaterial')
+mat.use_nodes = True
+node = mat.node_tree.nodes.new('ShaderNodeTexImage')
+node.image = bpy.data.images.load({str(texture)!r})
+mat.node_tree.links.new(node.outputs['Color'], mat.node_tree.nodes.get('Principled BSDF').inputs['Base Color'])
+obj.data.materials.append(mat)
+bpy.ops.export_scene.fbx(filepath={str(source)!r}, use_selection=True, bake_anim=False,
+                         path_mode='COPY', embed_textures=True)
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            str(blender),
+            "--background",
+            "--factory-startup",
+            "--python-exit-code",
+            "1",
+            "--python",
+            str(script),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    texture.unlink()
+    provider = LocalFileProvider()
+    resolved = provider.prepare(provider.resolve(str(source)), blender=blender)
+    normalized = provider.materialize(resolved, tmp_path / "snapshot")
+    source.unlink()
+    exported = export_model(
+        normalized.input.path,
+        tmp_path / "export",
+        blender,
+        dependency_remap=normalized.input.dependency_remap,
+    )
+    assert len(exported.materials) == 1
+    color = exported.materials[0].maps["base_color"]
+    np.testing.assert_allclose(read_image(color)[0, 0, :3], [0.8, 0.2, 0.1], atol=0.002)

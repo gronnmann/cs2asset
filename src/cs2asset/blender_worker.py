@@ -24,8 +24,10 @@ def image_path(image, output: Path, index: int) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         old_path, old_format = image.filepath_raw, image.file_format
         image.filepath_raw, image.file_format = str(path), "OPEN_EXR" if image.is_float else "PNG"
-        image.save()
-        image.filepath_raw, image.file_format = old_path, old_format
+        try:
+            image.save()
+        finally:
+            image.filepath_raw, image.file_format = old_path, old_format
     if not path.is_file():
         raise RuntimeError(f"Missing image dependency {image.name!r}: {path}")
     return str(path.resolve())
@@ -444,6 +446,13 @@ def material_info(material, index: int, output: Path) -> dict:
             result["constants"][semantic] = (
                 list(value) if semantic == "base_color" else float(value)
             )
+    if not result["maps"] and any(
+        node.type == "TEX_IMAGE" and node.image for node in material.node_tree.nodes
+    ):
+        result["warnings"].append(
+            f"Material {source_name!r} contains images that are not connected to supported "
+            "shader inputs; it will use constant colors. Connect textures or use --bake-materials."
+        )
     # A height-driven bump chain needs a bake. Ignoring it would alter shading.
     if outputs[0].inputs["Displacement"].is_linked:
         result["warnings"].append(
@@ -460,7 +469,9 @@ def load_source(job: dict):
     else:
         bpy.ops.wm.read_factory_settings(use_empty=True)
         if suffix == ".fbx":
-            bpy.ops.import_scene.fbx(filepath=str(source), use_anim=False)
+            # Resolve texture paths ourselves; recursive importer search can select an
+            # unrelated file with the same name and bypass snapshot remapping.
+            bpy.ops.import_scene.fbx(filepath=str(source), use_anim=False, use_image_search=False)
         elif suffix in {".gltf", ".glb"}:
             bpy.ops.import_scene.gltf(filepath=str(source))
         elif suffix == ".obj":
@@ -478,8 +489,26 @@ def load_source(job: dict):
         original = os.path.normcase(
             str(Path(bpy.path.abspath(image.filepath, library=image.library)).resolve())
         )
-        if original in remap:
-            image.filepath = remap[original]
+        target = remap.get(original)
+        if target is None and not Path(original).is_file():
+            filename = Path(original).name.casefold()
+            candidates = {v for k, v in remap.items() if Path(k).name.casefold() == filename}
+            if not remap:
+                # Restrict recovery to the model directory and its .fbm folder.
+                roots = [source.parent, source.with_suffix(".fbm")]
+                candidates = {
+                    str(p.resolve())
+                    for root in roots
+                    if root.is_dir()
+                    for p in root.iterdir()
+                    if p.is_file() and p.name.casefold() == filename
+                }
+            if len(candidates) > 1:
+                raise RuntimeError(f"Ambiguous texture {image.name!r}: {sorted(candidates)}")
+            if candidates:
+                target = next(iter(candidates))
+        if target:
+            image.filepath = target
             image.reload()
 
 

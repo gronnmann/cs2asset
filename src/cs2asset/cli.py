@@ -360,6 +360,9 @@ def import_command(
     tiling: float | None = None,
     yaw: float | None = None,
     exposure: float | None = None,
+    auto_exposure: Annotated[
+        bool | None, typer.Option(help="Reduce sky exposure to fit half-float HDR.")
+    ] = None,
     normal_format: str | None = None,
     blender: Path | None = None,
     dry_run: bool = False,
@@ -393,6 +396,7 @@ def import_command(
         "tiling": tiling,
         "yaw": yaw,
         "exposure": exposure,
+        "auto_exposure": auto_exposure,
         "normal_format": normal_format,
     }
 

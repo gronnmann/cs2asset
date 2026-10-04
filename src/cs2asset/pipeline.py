@@ -38,6 +38,7 @@ class ImportOptions:
     tiling: float = 1.0
     yaw: float = 0.0
     exposure: float = 0.0
+    auto_exposure: bool = False
     normal_format: str | None = None
     object_name: str | None = None
     collection: str | None = None
@@ -193,9 +194,17 @@ def convert_asset(
             inputs["hdri"],
             yaw=options.yaw,
             exposure=options.exposure,
+            auto_exposure=options.auto_exposure,
             name=name,
         )
         resources.append(material.relative_to(content).as_posix())
+        if detail["exposure_adjustment"]:
+            warnings.append(
+                f"Sky exposure reduced by {-detail['exposure_adjustment']:.6g} stops "
+                "to preserve highlights in half-float output."
+            )
+        if detail["clamped_negative_components"]:
+            warnings.append("Small negative sky radiance values were clamped to zero.")
         aliases[f"materials/skybox/cs2asset/{namespace}/{variant}/sky.vmat"] = resources[-1]
     elif isinstance(payload, ModelInput):
         material_root = f"materials/cs2asset/{namespace}/{variant}"

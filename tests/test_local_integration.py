@@ -54,7 +54,7 @@ bpy.context.scene.unit_settings.system = 'METRIC'
 bpy.ops.wm.save_as_mainfile(filepath=str(root / 'cube.blend'))
 bpy.ops.export_scene.gltf(filepath=str(root / 'cube.glb'), export_format='GLB')
 bpy.ops.export_scene.gltf(filepath=str(root / 'cube.gltf'), export_format='GLTF_SEPARATE')
-bpy.ops.export_scene.fbx(filepath=str(root / 'cube.fbx'), use_selection=True, bake_anim=False, path_mode='COPY')
+bpy.ops.export_scene.fbx(filepath=str(root / 'cube.fbx'), use_selection=True, bake_anim=False, path_mode='COPY', embed_textures=True)
 bpy.ops.wm.obj_export(filepath=str(root / 'cube.obj'), export_selected_objects=True, export_materials=True)
 """,
         encoding="utf-8",
@@ -92,6 +92,11 @@ def test_real_local_model_formats(local_tools, extension):
         assert first["detail"]["dimensions_units"] == pytest.approx([1 / 0.0254] * 3, rel=1e-4)
         assert first["detail"]["mesh_count"] == 1
         assert first["snapshot"]
+        color_sources = list(project.content_dir.glob("materials/cs2asset/local/**/base_color.png"))
+        assert color_sources
+        assert any(
+            np.allclose(read_image(p)[0, 0, :3], [0.8, 0.4, 0.2], atol=0.002) for p in color_sources
+        )
         assert first["resources"][-1].endswith("/cube.vmdl")
         assert first["compiler_warnings"] == []
         compile_log = (

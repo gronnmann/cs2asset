@@ -79,3 +79,45 @@ def test_sky_rejects_tonemapped_preview_and_wrong_projection(tmp_path):
 def test_invalid_tiling_rejected(tmp_path, tiling):
     with pytest.raises(CS2AssetError, match="tiling"):
         create_material(tmp_path, "materials/test", {}, tiling=tiling)
+
+
+@pytest.mark.parametrize("auto", [False, True])
+def test_sky_overflow_exposure(tmp_path, auto):
+    pixels = np.broadcast_to([131008.0, 65504.0, 32752.0], (4, 8, 3))
+    source = write_image(tmp_path / "bright.exr", pixels, hdr=True, full_float=True)
+    if not auto:
+        with pytest.raises(CS2AssetError, match="auto-exposure"):
+            create_sky(tmp_path, "materials/skybox/bright", source)
+    sky, info = create_sky(
+        tmp_path, "materials/skybox/bright", source, auto_exposure=auto, exposure=0 if auto else -1
+    )
+    np.testing.assert_allclose(
+        read_image(sky.parent / "sky.exr")[0, 0], [65504, 32752, 16376], rtol=0.001
+    )
+    assert info["effective_exposure"] == -1
+
+
+@pytest.mark.parametrize("minimum", [-0.0001, -0.1])
+def test_sky_negative_radiance(tmp_path, minimum):
+    pixels = np.ones((4, 8, 3))
+    pixels[0, 0, 0] = minimum
+    source = write_image(tmp_path / "negative.exr", pixels, hdr=True, full_float=True)
+    if minimum < -0.001:
+        with pytest.raises(CS2AssetError, match="negative radiance"):
+            create_sky(tmp_path, "materials/skybox/negative", source)
+    else:
+        sky, info = create_sky(tmp_path, "materials/skybox/negative", source)
+        assert read_image(sky.parent / "sky.exr").min() == 0
+        assert info["clamped_negative_components"] == 1
+
+
+def test_hdr_resize_preserves_overflow_until_exposure(tmp_path):
+    from cs2asset.images import resize_image
+
+    source = write_image(
+        tmp_path / "large.exr", np.full((16, 32, 3), 100000), hdr=True, full_float=True
+    )
+    resized = resize_image(source, tmp_path / "resized.exr", 16)
+    assert read_image(resized).max() > 65504
+    sky, _ = create_sky(tmp_path, "materials/skybox/resized", resized, exposure=-1)
+    np.testing.assert_allclose(read_image(sky.parent / "sky.exr"), 50000, rtol=0.001)

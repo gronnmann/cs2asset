@@ -283,6 +283,10 @@ Packed ARM/ORM maps are supported when their layout is known.
 
 ## Models
 
+FBX embedded images are extracted into the build workspace. Missing external images
+are resolved against the model directory and its `.fbm` folder; ambiguous filenames
+produce an error. Textures must be connected to supported material shader inputs.
+
 Supported formats:
 
 ```text
@@ -362,6 +366,8 @@ uvx cs2asset init --project de_example
 ```
 
 Non-interactive commands do not stop to ask for project selection.
+
+For the complete command and argument list, see the [CLI reference](docs/cli-reference.md).
 
 ## Common commands
 

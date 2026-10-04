@@ -118,6 +118,7 @@ def create_sky(
     *,
     yaw: float = 0,
     exposure: float = 0,
+    auto_exposure: bool = False,
     name: str = "sky",
 ) -> tuple[Path, dict]:
     if not math.isfinite(exposure) or not -32 <= exposure <= 32:
@@ -128,7 +129,28 @@ def create_sky(
     h, w = pixels.shape[:2]
     if w != 2 * h or pixels.shape[2] != 3:
         raise CS2AssetError("Sky input must be an RGB 2:1 equirectangular HDR panorama")
-    pixels = rotate_panorama(pixels, yaw) * (2.0**exposure)
+    minimum, maximum = float(pixels.min()), float(pixels.max())
+    negative_count = int(np.count_nonzero(pixels < 0))
+    # A small absolute tolerance handles numerical noise without hiding invalid radiance.
+    if minimum < -0.001:
+        raise CS2AssetError(
+            f"Sky contains negative radiance: minimum={minimum:.6g}, maximum={maximum:.6g}, "
+            f"negative components={negative_count}. Repair the source HDR image."
+        )
+    pixels = rotate_panorama(np.maximum(pixels, 0), yaw) * (2.0**exposure)
+    adjustment = 0.0
+    peak = float(pixels.max())
+    if peak > 65504:
+        adjustment = math.log2(65504 / peak)
+        if not auto_exposure:
+            raise CS2AssetError(
+                f"Sky exceeds half-float range: minimum={float(pixels.min()):.6g}, "
+                f"maximum={peak:.6g}, overflowing components={int(np.count_nonzero(pixels > 65504))}. "
+                f"Use --exposure {math.floor((exposure + adjustment) * 1e6) / 1e6:.6f} "
+                "or --auto-exposure."
+            )
+        pixels = pixels * (65504 / peak)
+
     output = content / resource_dir
     write_image(output / "sky.exr", pixels, hdr=True)
     # SkyTexture (not TextureSky) makes Valve generate the HDR cubemap and SH data.
@@ -148,4 +170,9 @@ def create_sky(
         "maximum_radiance": float(pixels.max()),
         "yaw": yaw,
         "exposure": exposure,
+        "exposure_adjustment": adjustment,
+        "effective_exposure": exposure + adjustment,
+        "source_minimum_radiance": minimum,
+        "source_maximum_radiance": maximum,
+        "clamped_negative_components": negative_count,
     }
