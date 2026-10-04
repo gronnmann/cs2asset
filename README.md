@@ -4,14 +4,14 @@ Import textures, HDR skies, and 3D models into **Counter-Strike 2 Hammer**.
 
 `cs2asset` converts common asset formats into Source 2 resources, runs Valve's compiler, and installs the result directly into a selected CS2 addon.
 
-Assets can come from local files or supported online providers. [Poly Haven](https://polyhaven.com/) is supported out of the box.
+Assets can come from local files, [Poly Haven](https://polyhaven.com/), or [ambientCG](https://ambientcg.com/). Poly Haven supports materials, HDR skies, and models; ambientCG supports PBR materials.
 
 ## Features
 
 - Import PBR texture sets as CS2 materials
 - Import `.blend`, `.glb`, `.gltf`, `.fbx`, and `.obj` models
 - Import `.hdr` and `.exr` panoramas as HDR skies
-- Search and import assets directly from Poly Haven
+- Search and import assets directly from Poly Haven and ambientCG
 - Generate editable Source 2 source files and compiled resources
 - Automatically discover CS2 Workshop Tools, Blender, and addon projects
 - Rebuild previously imported assets without changing their Hammer paths
@@ -64,6 +64,12 @@ Or import directly from Poly Haven:
 uvx cs2asset import polyhaven:concrete_floor_01 --resolution 2k
 uvx cs2asset import polyhaven:sunset_jhbcentral --resolution 4k
 uvx cs2asset import polyhaven:dirty_football --resolution 2k
+```
+
+Or import a material directly from ambientCG:
+
+```powershell
+uvx cs2asset import ambientcg:Grass005 --resolution 2k
 ```
 
 After an import, `cs2asset` prints the final Source 2 resource path. Use that path directly in Hammer's Asset Browser.
@@ -133,6 +139,63 @@ uvx cs2asset rebuild IMPORT_ID --offline
 
 Poly Haven assets are CC0.
 
+## Using ambientCG
+
+ambientCG provides PBR materials that can be downloaded and imported directly into Hammer.
+
+Search for materials from the CLI:
+
+```powershell
+uvx cs2asset search "grass" --provider ambientcg
+```
+
+Then import a material by ID:
+
+```powershell
+uvx cs2asset import ambientcg:Grass005
+```
+
+You can also paste an ambientCG asset URL directly:
+
+```powershell
+uvx cs2asset import https://ambientcg.com/a/Grass005
+```
+
+Inspect the selected download before importing:
+
+```powershell
+uvx cs2asset info ambientcg:Grass005
+```
+
+Choose a resolution:
+
+```powershell
+uvx cs2asset import ambientcg:Grass005 --resolution 1k
+uvx cs2asset import ambientcg:Grass005 --resolution 2k
+```
+
+The default resolution is 2K. The importer prefers PNG packages and falls back to
+JPG at the requested resolution. If that resolution is unavailable, it reports
+the available packages.
+
+Once imported, materials can be listed and rebuilt like other imports:
+
+```powershell
+uvx cs2asset list
+uvx cs2asset rebuild IMPORT_ID
+```
+
+Cached ambientCG materials can also be rebuilt offline:
+
+```powershell
+uvx cs2asset rebuild IMPORT_ID --offline
+```
+
+Use the `ambientcg:` prefix or an ambientCG asset URL; bare asset IDs default to
+Poly Haven. ambientCG support currently covers materials.
+
+ambientCG assets are CC0.
+
 ## Supported inputs
 
 `cs2asset` normally detects the asset type automatically.
@@ -150,6 +213,8 @@ Poly Haven assets are CC0.
 | Texture ZIP | Material |
 | `polyhaven:ID` | Poly Haven asset |
 | Poly Haven asset URL | Poly Haven asset |
+| `ambientcg:ID` | ambientCG material |
+| ambientCG asset URL | ambientCG material |
 
 You can require a specific asset type with:
 
@@ -196,11 +261,19 @@ A base-color texture is required.
 
 Generic names such as `normal` and `nrm` are treated as OpenGL normal maps by default. Explicit GL and DirectX names are detected automatically.
 
-You can override the format:
+You can specify the convention for generic normal filenames:
 
 ```powershell
 uvx cs2asset import .\rock\ --normal-format dx
 ```
+
+Local folders and ZIP packages can contain both DirectX and OpenGL normal maps
+for the same material. The importer selects OpenGL when both exist and detects
+DirectX when it is the only variant. Duplicate maps of one convention and mixed
+texture sets still produce an ambiguity error. Explicit `NormalGL`/`NormalDX`
+filenames determine conversion; `--normal-format dx` is a hint for generic
+normal filenames with no declared convention. Selected normals are reported in
+choices and warnings, and DirectX inputs are converted to OpenGL once.
 
 Materials use CS2's `csgo_complex.vfx` shader.
 
@@ -305,8 +378,9 @@ uvx cs2asset import SOURCE
 # Inspect an asset
 uvx cs2asset info SOURCE
 
-# Search Poly Haven
+# Search online providers
 uvx cs2asset search "QUERY" --provider polyhaven
+uvx cs2asset search "QUERY" --provider ambientcg
 
 # List installed imports
 uvx cs2asset list
@@ -602,7 +676,7 @@ Use the new version number for subsequent releases. PyPI versions cannot be reus
 
 See [`LICENSE`](LICENSE) for the license of `cs2asset`.
 
-Assets imported through `cs2asset` retain their original licenses. Poly Haven assets are CC0.
+Assets imported through `cs2asset` retain their original licenses. Poly Haven and ambientCG assets are CC0.
 
 
 ## Models with multiple objects and mapped materials
@@ -638,29 +712,3 @@ overlapping UVs must represent compatible surface values, and UV islands must fi
 the texture tile. A mixed surface with one connected Principled shader can bake that PBR component;
 additional translucent/additive lobes are omitted and reported. Surfaces without a
 unique connected Principled shader remain unsupported.
-
-
-### ambientCG materials
-
-Import ambientCG PBR materials directly using API v3:
-
-```powershell
-uvx cs2asset search grass --provider ambientcg
-uvx cs2asset info ambientcg:Grass005
-uvx cs2asset import ambientcg:Grass005 --resolution 2k
-uvx cs2asset import https://ambientcg.com/a/Grass005 --resolution 2k
-```
-
-The default resolution is 2k. The importer prefers PNG packages and falls back to
-JPG at the requested resolution; unavailable resolutions report the available
-packages. Downloads and metadata use the existing cache, including `--offline`
-after an online import. Bare asset IDs still refer to Poly Haven. ambientCG
-support currently covers materials; other asset types produce a clear error.
-
-Local folders and ZIP packages can contain both DirectX and OpenGL normal maps
-for the same material. The importer selects OpenGL when both exist and detects
-DirectX when it is the only variant. Duplicate maps of one convention and mixed
-texture sets still produce an ambiguity error. Explicit `NormalGL`/`NormalDX`
-filenames determine conversion; `--normal-format dx` is a hint for generic
-normal filenames with no declared convention. Selected normals are reported in
-choices and warnings, and DirectX inputs are converted to OpenGL once.
