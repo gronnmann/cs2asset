@@ -1,0 +1,127 @@
+"""CS2 material source generation validated with Valve's resourcecompiler."""
+
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+from .errors import CS2AssetError
+from .images import linear_to_srgb, normalize_map, read_image, rotate_panorama, write_image
+
+TEMPLATE_VERSION = 2
+
+
+def write_vmat(destination: Path, fields: dict) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    lines = ['"Layer0"', "{"]
+    for key, value in fields.items():
+        lines.append(f"    {key} {json.dumps(str(value))}")
+    lines.append("}")
+    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return destination
+
+
+def create_material(
+    content: Path,
+    resource_dir: str,
+    maps: dict[str, Path],
+    *,
+    normal_format: str = "gl",
+    constants: dict | None = None,
+    surface: str = "default",
+    tiling: float = 1.0,
+) -> tuple[Path, list[str]]:
+    """Write material.vmat and normalized maps under a relative addon directory."""
+    if not math.isfinite(tiling) or tiling <= 0:
+        raise CS2AssetError("Material tiling must be a finite positive number")
+    constants = constants or {}
+    destination = content / resource_dir
+    destination.mkdir(parents=True, exist_ok=True)
+    warnings = []
+    defaults = {
+        "base_color": constants.get("base_color", [0.5, 0.5, 0.5]),
+        "normal": [0.5, 0.5, 1.0],
+        "roughness": [constants.get("roughness", 0.5)],
+        "metalness": [constants.get("metalness", 0.0)],
+        "ao": [1.0],
+    }
+    parameters = {
+        "base_color": "TextureColor",
+        "normal": "TextureNormal",
+        "roughness": "TextureRoughness",
+        "metalness": "TextureMetalness",
+        "ao": "TextureAmbientOcclusion",
+        "opacity": "TextureTranslucency",
+    }
+    fields = {
+        "shader": "csgo_complex.vfx",
+        "F_SPECULAR": 1,
+        "F_METALNESS_TEXTURE": 1,
+        "PhysicsSurfaceProperties": surface,
+        "g_vTexCoordScale": f"[{tiling} {tiling}]",
+    }
+    # Use separate opacity, as specified by Valve's own import_settings.txt.
+    maps = dict(maps)
+    if "opacity" not in maps and "base_color" in maps:
+        color = read_image(maps["base_color"])
+        if color.shape[2] in {2, 4} and np.any(color[:, :, -1] < 0.999):
+            maps["opacity"] = write_image(destination / "source_alpha.png", color[:, :, -1:])
+    if constants.get("opacity", 1.0) < 1.0 and "opacity" not in maps:
+        maps["opacity"] = write_image(
+            destination / "source_alpha.png", np.full((4, 4, 1), constants["opacity"])
+        )
+    for role, parameter in parameters.items():
+        target = destination / f"{role}.png"
+        if role in maps:
+            normalize_map(maps[role], target, role, normal_format=normal_format)
+        elif role in defaults:
+            values = np.asarray(defaults[role], dtype=np.float32).reshape(-1)[:3]
+            if role == "base_color" and "base_color" in constants:
+                values = linear_to_srgb(values)
+            write_image(target, np.broadcast_to(values, (4, 4, len(values))).copy())
+            warnings.append(f"{role}: using constant {values.tolist()}")
+        else:
+            continue
+        fields[parameter] = f"{resource_dir}/{role}.png"
+    if "opacity" in maps:
+        fields["F_ALPHA_TEST"] = 1
+        fields["g_flAlphaTestReference"] = 0.5
+        warnings.append("Opacity uses alpha testing (cutout), not blended transparency")
+    if "height" in maps:
+        warnings.append("Height map is retained in the download cache; displacement is not enabled")
+    return write_vmat(destination / "material.vmat", fields), warnings
+
+
+def create_sky(
+    content: Path, resource_dir: str, source: Path, *, yaw: float = 0, exposure: float = 0
+) -> tuple[Path, dict]:
+    if not math.isfinite(exposure) or not -32 <= exposure <= 32:
+        raise CS2AssetError("Sky exposure must be finite and between -32 and 32 stops")
+    if source.suffix.lower() not in {".hdr", ".exr"}:
+        raise CS2AssetError("Sky source must be an HDR/EXR panorama, not a tonemapped preview")
+    pixels = read_image(source)[:, :, :3]
+    h, w = pixels.shape[:2]
+    if w != 2 * h or pixels.shape[2] != 3:
+        raise CS2AssetError("Sky input must be an RGB 2:1 equirectangular HDR panorama")
+    pixels = rotate_panorama(pixels, yaw) * (2.0**exposure)
+    output = content / resource_dir
+    write_image(output / "sky.exr", pixels, hdr=True)
+    # SkyTexture (not TextureSky) makes Valve generate the HDR cubemap and SH data.
+    material = write_vmat(
+        output / "sky.vmat",
+        {
+            "shader": "sky.vfx",
+            "SkyTexture": f"{resource_dir}/sky.exr",
+            "g_flBrightnessExposureBias": 0.0,
+            "g_flRenderOnlyExposureBias": 0.0,
+        },
+    )
+    return material, {
+        "panorama_width": w,
+        "panorama_height": h,
+        "expected_face_size": w // 4,
+        "maximum_radiance": float(pixels.max()),
+        "yaw": yaw,
+        "exposure": exposure,
+    }
