@@ -4,7 +4,7 @@ Import textures, HDR skies, and 3D models into **Counter-Strike 2 Hammer**.
 
 `cs2asset` converts common asset formats into Source 2 resources, runs Valve's compiler, and installs the result directly into a selected CS2 addon.
 
-Assets can come from local files, [Poly Haven](https://polyhaven.com/), or [ambientCG](https://ambientcg.com/). Poly Haven supports materials, HDR skies, and models; ambientCG supports PBR materials.
+Assets can come from local files, [Poly Haven](https://polyhaven.com/), or [ambientCG](https://ambientcg.com/). Both providers support PBR materials, HDR skies, and static models.
 
 ## Features
 
@@ -163,7 +163,7 @@ Poly Haven assets are CC0.
 
 ## Using ambientCG
 
-ambientCG provides PBR materials that can be downloaded and imported directly into Hammer.
+ambientCG provides PBR materials, HDRI panoramas, and 3D models that can be imported directly into Hammer.
 
 Search for materials from the CLI:
 
@@ -200,21 +200,32 @@ The default resolution is 2K. The importer prefers PNG packages and falls back t
 JPG at the requested resolution. If that resolution is unavailable, it reports
 the available packages.
 
-Once imported, materials can be listed and rebuilt like other imports:
+Import models and skies by ID or URL:
+
+```powershell
+cs2asset import ambientcg:3DApple001 --resolution 2k
+cs2asset import https://ambientcg.com/view?id=DaySkyHDRI071A --resolution 4k --auto-exposure
+cs2asset search "apple" --provider ambientcg --type models
+cs2asset search "day sky" --provider ambientcg --type hdris
+```
+
+Models default to 2K textures and prefer SQ geometry, falling back to HQ or LQ when needed. Model ZIP dependencies are inspected with Blender before conversion. HDRIs default to 4K and use the EXR/HDR panorama from the package, not its tonemapped preview. Small negative ambientCG EXR values down to −0.01 are clamped in a separate working copy, with the original hash and adjustment recorded in the import report; larger negative radiance remains an error.
+
+Once imported, assets can be listed and rebuilt like other imports:
 
 ```powershell
 uvx cs2asset list
 uvx cs2asset rebuild IMPORT_ID
 ```
 
-Cached ambientCG materials can also be rebuilt offline:
+Cached ambientCG assets can also be rebuilt offline:
 
 ```powershell
 uvx cs2asset rebuild IMPORT_ID --offline
 ```
 
 Use the `ambientcg:` prefix or an ambientCG asset URL; bare asset IDs default to
-Poly Haven. ambientCG support currently covers materials.
+Poly Haven. ambientCG supports materials, models, and HDRIs.
 
 ambientCG assets are CC0.
 
@@ -235,8 +246,8 @@ ambientCG assets are CC0.
 | Texture ZIP | Material |
 | `polyhaven:ID` | Poly Haven asset |
 | Poly Haven asset URL | Poly Haven asset |
-| `ambientcg:ID` | ambientCG material |
-| ambientCG asset URL | ambientCG material |
+| `ambientcg:ID` | ambientCG asset |
+| ambientCG asset URL | ambientCG asset |
 
 You can require a specific asset type with:
 
